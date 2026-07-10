@@ -1,27 +1,32 @@
 #!/bin/bash
 # ==============================================================================
-# FC-KD Pipeline Execution Wrapper
+# Precision Medicine Pipeline Execution Wrapper (Kaggle/Colab Optimized)
 # ==============================================================================
+
+# Exit immediately if a command exits with a non-zero status
 set -e
 
-echo "🧬 [1/3] Initializing Environment Verification..."
-if ! command -v conda &> /dev/null; then
-    echo "❌ Conda could not be found. Please ensure Anaconda/Miniconda is installed."
-    exit 1
-fi
+echo "📦 [1/3] Installing/Updating required dependencies..."
+# We skip PyTorch installation because Kaggle already has it pre-installed.
+pip install -q -U "numpy<2" scipy pandas datasets pytdc
+pip install -q -U bitsandbytes "peft>=0.18.1" "accelerate==0.33.0" "transformers==4.45.2" "huggingface-hub>=0.26.0,<1.0" "trl<=0.11.0"
+pip install -q flash-attn --no-build-isolation
+echo "✅ Dependencies ready."
 
-echo "🔄 [2/3] Activating virtual environment 'fc-kd'..."
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate fc-kd
-
-echo "🚀 [3/3] Testing hardware acceleration..."
-python -c "import torch; print('✅ CUDA Available:', torch.cuda.is_available(), '| Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
+echo "🚀 [2/3] Testing hardware acceleration..."
+python -c "
+import torch
+if torch.cuda.is_available():
+    print(f'✅ CUDA Available | Device: {torch.cuda.get_device_name(0)}')
+else:
+    print('⚠️ WARNING: CUDA not detected. The script will fall back to CPU and likely run out of memory.')
+"
 
 echo "--------------------------------------------------"
-echo "🏃 Starting Pipeline Execution..."
-echo "   Set ACTIVE_STAGE in config.py to select: 1=SFT, 2=ORPO, 3=FC-KD, 4=Evaluation"
+echo "🏃 [3/3] Starting Precision Medicine Routing Execution..."
 echo "--------------------------------------------------"
 
+# Run the master router module
 python main.py
 
 echo "--------------------------------------------------"
