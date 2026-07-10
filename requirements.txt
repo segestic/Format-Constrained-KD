@@ -1,0 +1,25 @@
+# Core ML stack
+torch==2.7.0
+torchvision==0.22.0
+torchaudio==2.7.0
+
+# Hugging Face ecosystem
+transformers>=4.57.1
+peft>=0.18.1
+accelerate>=1.12.0
+huggingface_hub>=1.3.1
+trl<=0.11.0
+bitsandbytes
+datasets==3.2.0
+
+# Data & experiment tracking
+numpy<2
+scipy
+pandas
+pyarrow
+pytdc
+wandb
+ipywidgets
+
+# Optional: memory-efficient attention (requires matching CUDA toolchain)
+# flash-attn --no-build-isolation
