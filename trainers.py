@@ -55,7 +55,7 @@ class PipelineTrainer:
             processing_class=tokenizer,
             args=SFTConfig(
                 dataset_text_field="text",
-                max_length=CONFIG["s1_max_length"],
+                max_seq_length=CONFIG["s1_max_length"],
                 output_dir=output_dir,
                 num_train_epochs=CONFIG["GLOBAL_EPOCHS"],
                 per_device_train_batch_size=CONFIG["GLOBAL_BATCH_SIZE"],
@@ -133,7 +133,7 @@ class PipelineTrainer:
             processing_class=tokenizer,
             args=SFTConfig(
                 dataset_text_field="text",
-                max_length=CONFIG["s3_max_length"],
+                max_seq_length=CONFIG["s3_max_length"],
                 output_dir=output_dir,
                 num_train_epochs=CONFIG["GLOBAL_EPOCHS"],
                 per_device_train_batch_size=CONFIG["GLOBAL_BATCH_SIZE"],
