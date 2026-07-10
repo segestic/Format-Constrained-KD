@@ -52,7 +52,7 @@ class PipelineTrainer:
             model=model,
             train_dataset=train_data,
             eval_dataset=eval_data,
-            processing_class=tokenizer,
+            tokenizer=tokenizer,
             args=SFTConfig(
                 dataset_text_field="text",
                 max_seq_length=CONFIG["s1_max_length"],
@@ -130,7 +130,7 @@ class PipelineTrainer:
             model=model,
             train_dataset=syn_split["train"],
             eval_dataset=syn_split["test"],
-            processing_class=tokenizer,
+            tokenizer=tokenizer,
             args=SFTConfig(
                 dataset_text_field="text",
                 max_seq_length=CONFIG["s3_max_length"],
