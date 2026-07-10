@@ -70,11 +70,11 @@ pip install -r requirements.txt
 pip install flash-attn --no-build-isolation
 ```
 
-Set Hugging Face and Weights & Biases credentials as environment variables rather than hardcoding them:
+Authenticate with Hugging Face and Weights & Biases using their respective CLIs:
 
 ```bash
-export HF_TOKEN="hf_..."
-export WANDB_API_KEY="..."
+huggingface-cli login
+wandb login
 ```
 
 ---
