@@ -80,7 +80,7 @@ EVAL_CONFIG = {
         # "olusegunola/phi-1.5-primekg-sft",
         # "olusegunola/phi-1.5-primekg-orpo",
     ],
-    "output_dir": "./eval_outputs",
+    "output_dir": "outputs/eval_outputs",
 }
 EVAL_CONFIG["ALL_MODELS"] = EVAL_CONFIG["CUSTOM_MODELS"] + [EVAL_CONFIG["CONTROL_MODEL"]]
 
