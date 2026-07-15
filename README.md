@@ -57,25 +57,36 @@ fc-kd-repo/
 
 ---
 
-## Installation
+## Setup & Installation
+
+We provide two ways to run this pipeline. We highly recommend using Docker to ensure reproducible FlashAttention compilation and avoid CUDA/PyTorch dependency conflicts.
+
+### Option A: Docker (Recommended)
+
+Build the container image. This process installs all system dependencies, the correct PyTorch wheel, and compiles FlashAttention for the target architecture.
+
+```bash
+docker build -t format-constrained-kd .
+
+```
+
+### Option B: Local Conda Environment
+
+Alternatively, install the dependencies directly on your host machine:
 
 ```bash
 conda create -n fc-kd python=3.10 -y
 conda activate fc-kd
 
-pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install --upgrade torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
 pip install -r requirements.txt
 
 # Optional, requires a matching CUDA toolchain:
 pip install flash-attn --no-build-isolation
+
 ```
 
-Authenticate with Hugging Face and Weights & Biases using their respective CLIs:
-
-```bash
-huggingface-cli login
-wandb login
-```
+*Note: If using the local environment, you must authenticate with Hugging Face and Weights & Biases manually using `hf auth login` and `wandb login`.*
 
 ---
 
@@ -84,27 +95,50 @@ wandb login
 Everything is controlled through `config.py` to keep runs fully reproducible without command-line argument sprawl.
 
 1. Open `config.py` and set `ACTIVE_STAGE`:
-   - `1` — Structural SFT Warm-Up (PrimeKG)
-   - `2` — Topology-Anchored ORPO (PrimeKG, branches from Stage 1)
-   - `3` — Format-Constrained KD / FC-KD (PrimeKG, branches from Stage 1)
-   - `4` — Dual-Modality Evaluation (PharmGKB, cross-domain zero-shot)
+* `1` — Structural SFT Warm-Up (PrimeKG)
+* `2` — Topology-Anchored ORPO (PrimeKG, branches from Stage 1)
+* `3` — Format-Constrained KD / FC-KD (PrimeKG, branches from Stage 1)
+* `4` — Dual-Modality Evaluation (PharmGKB, cross-domain zero-shot)
+
 
 2. For Stage 4, also confirm `EVAL_CONFIG["EVAL_MODE"]` — leave as `"cross_domain"` to reproduce the paper's results.
 
-3. Run:
+### Using Docker (Live Mount)
+
+The Docker execution uses a live volume mount (`-v $(pwd):/workspace`). This means you can change `config.py` on your host machine, save it, and instantly run the next stage without rebuilding the image. Output models and data caches are safely saved to your host drive.
+
+First, ensure the script is executable (only needed once):
+
+```bash
+chmod +x run_pipeline.sh
+
+```
+
+Execute the pipeline by injecting your API tokens at runtime:
+
+```bash
+docker run --gpus all -it --rm \
+  -e HF_TOKEN="your_hf_token_here" \
+  -e WANDB_API_KEY="your_wandb_token_here" \
+  -v $(pwd):/workspace \
+  format-constrained-kd bash run_pipeline.sh
+
+```
+
+### Using Local Environment
+
+If you installed the requirements via Conda instead of Docker, execute the wrapper script directly:
 
 ```bash
 chmod +x run_pipeline.sh
 ./run_pipeline.sh
-```
 
-Or directly:
-
-```bash
-python main.py
 ```
 
 PrimeKG and PharmGKB are downloaded and cached to `./data` automatically on first use.
+
+---
+
 
 ---
 
