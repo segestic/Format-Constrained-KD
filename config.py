@@ -43,19 +43,19 @@ CONFIG = {
     # --- Stage 1: Structural SFT Warm-Up ---
     "s1_lr": 2e-4,
     "s1_max_length": 512,
-    "s1_output_dir": "outputs/phi-1.5-primekg-sft",
+    "s1_output_dir": "phi-1.5-primekg-sft",
 
     # --- Stage 2: Topology-Anchored ORPO ---
     "s2_lr": 8e-6,
     "s2_beta": 0.1,
     "s2_max_length": 512,
     "s2_max_prompt_length": 256,
-    "s2_output_dir": "outputs/phi-1.5-primekg-orpo",
+    "s2_output_dir": "phi-1.5-primekg-orpo",
 
     # --- Stage 3: Format-Constrained Sequence-Level Distillation (FC-KD) ---
     "s3_lr": 5e-5,
     "s3_max_length": 512,
-    "s3_output_dir": "outputs/phi-1.5-primekg-dkd",
+    "s3_output_dir": "phi-1.5-primekg-dkd",
 }
 
 # ==============================================================================
@@ -80,7 +80,7 @@ EVAL_CONFIG = {
         # "olusegunola/phi-1.5-primekg-sft",
         # "olusegunola/phi-1.5-primekg-orpo",
     ],
-    "output_dir": "outputs/eval_outputs",
+    "output_dir": "./eval_outputs",
 }
 EVAL_CONFIG["ALL_MODELS"] = EVAL_CONFIG["CUSTOM_MODELS"] + [EVAL_CONFIG["CONTROL_MODEL"]]
 
