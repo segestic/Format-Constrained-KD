@@ -20,6 +20,11 @@ from data_utils import PrimeKGDataLoader
 from evaluate import Evaluator
 from trainers import PipelineTrainer
 
+from transformers import logging as hf_logging
+
+# Force Hugging Face to only print fatal errors, hiding the deprecation spam
+hf_logging.set_verbosity_error()
+
 
 def authenticate_services():
     try:
