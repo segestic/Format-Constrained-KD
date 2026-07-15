@@ -90,18 +90,16 @@ pip install flash-attn --no-build-isolation
 
 ---
 
-## Running the Pipeline
-
 Everything is controlled through `config.py` to keep runs fully reproducible without command-line argument sprawl.
 
-1. Open `config.py` and set `ACTIVE_STAGE`:
-* `1` — Structural SFT Warm-Up (PrimeKG)
-* `2` — Topology-Anchored ORPO (PrimeKG, branches from Stage 1)
-* `3` — Format-Constrained KD / FC-KD (PrimeKG, branches from Stage 1)
-* `4` — Dual-Modality Evaluation (PharmGKB, cross-domain zero-shot)
+1. **Set your Hugging Face username:** Open `config.py` and change `"hub_username"` to your own Hugging Face account name. If you skip this, the script will attempt to upload models to the author's repository and crash with a `403 Forbidden` error.
+2. **Select the active stage:** In `config.py`, set `ACTIVE_STAGE`:
+   - `1` — Structural SFT Warm-Up (PrimeKG)
+   - `2` — Topology-Anchored ORPO (PrimeKG, branches from Stage 1)
+   - `3` — Format-Constrained KD / FC-KD (PrimeKG, branches from Stage 1)
+   - `4` — Dual-Modality Evaluation (PharmGKB, cross-domain zero-shot)
+3. **Configure evaluation:** For Stage 4, confirm `EVAL_CONFIG["EVAL_MODE"]` — leave as `"cross_domain"` to reproduce the paper's results.
 
-
-2. For Stage 4, also confirm `EVAL_CONFIG["EVAL_MODE"]` — leave as `"cross_domain"` to reproduce the paper's results.
 
 ### Using Docker (Live Mount)
 
