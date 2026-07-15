@@ -85,10 +85,45 @@ class PipelineTrainer:
         base_model = get_quantized_base_model(CONFIG["student_name"])
         model = PeftModel.from_pretrained(base_model, input_dir, is_trainable=True)
 
+        # ====================================================================
+        # FIX FOR TRL/TRANSFORMERS VERSION MISMATCHES (v5.8.1 compat)
+        # ====================================================================
+        from trl import ORPOTrainer
+        from transformers import Trainer
+        
+        # 1. Patch get_batch_samples (Name Collision Fix)
+        original_orpo_get_batch_samples = ORPOTrainer.get_batch_samples
+        original_trainer_get_batch_samples = Trainer.get_batch_samples
+        
+        def smart_get_batch_samples(self, *args, **kwargs):
+            if len(args) >= 3:
+                return original_trainer_get_batch_samples(self, *args, **kwargs)
+            return original_orpo_get_batch_samples(self, *args, **kwargs)
+            
+        ORPOTrainer.get_batch_samples = smart_get_batch_samples
+
+        # 2. Patch compute_loss (Unexpected Keyword Fix)
+        original_compute_loss = ORPOTrainer.compute_loss
+        
+        def patched_compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
+            return original_compute_loss(self, model, inputs, return_outputs=return_outputs)
+            
+        ORPOTrainer.compute_loss = patched_compute_loss
+
+        # 3. Patch log (Unexpected start_time Fix)
+        original_log = ORPOTrainer.log
+
+        def patched_log(self, logs, *args, **kwargs):
+            # transformers passes (logs, start_time), but ORPOTrainer only expects (logs)
+            return original_log(self, logs)
+
+        ORPOTrainer.log = patched_log
+        # ====================================================================
+
         trainer = ORPOTrainer(
             model=model,
             train_dataset=train_data,
-            processing_class=tokenizer,
+            tokenizer=tokenizer,
             args=ORPOConfig(
                 output_dir=output_dir,
                 num_train_epochs=CONFIG["GLOBAL_EPOCHS"],
@@ -114,7 +149,8 @@ class PipelineTrainer:
         clear_gpu_cache()
         input_repo_id = f"{CONFIG['hub_username']}/{CONFIG['s1_output_dir']}-seed{self.seed}"
         output_dir = f"./{CONFIG['s3_output_dir']}-seed{self.seed}"
-        synthetic_data_repo = f"{CONFIG['hub_username']}/primekg-phi3-distilled-sft-seed{self.seed}"
+        #synthetic_data_repo = f"{CONFIG['hub_username']}/primekg-phi3-distilled-sft-seed{self.seed}"
+        synthetic_data_repo = f"olusegunola/primekg-phi3-distilled-sft-seed{self.seed}"
 
         tokenizer = get_tokenizer(input_repo_id)
 
