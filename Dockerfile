@@ -11,38 +11,39 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH="/usr/local/bin:$PATH"
 
 # ==============================================================================
-# 2. SYSTEM DEPENDENCIES: Install Python 3.10 and Build Frameworks
+# 2. SYSTEM DEPENDENCIES & BUILD FRAMEWORKS
 # ==============================================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 python3.10-dev python3-pip git ninja-build build-essential \
     && rm -rf /var/lib/apt/lists/* && ln -s /usr/bin/python3.10 /usr/local/bin/python
 
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel packaging ninja
+# Upgrade build tools but STRICTLY PIN setuptools so TDC doesn't crash!
+RUN pip3 install --no-cache-dir --upgrade pip wheel packaging ninja "setuptools<70.0.0"
 
 # ==============================================================================
-# 3. CORE AI TOOLCHAINS: Target explicit versions with safe CUDA wheel fallback
+# 3. CORE AI TOOLCHAINS & DEPENDENCIES (Single Source of Truth)
 # ==============================================================================
+# Set workspace early so we can copy the requirements file
+WORKDIR /workspace
+
+# Install PyTorch (Heavy binaries, best kept on its own caching layer)
 RUN pip3 install --no-cache-dir torch==2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-RUN pip3 install --no-cache-dir transformers==5.8.1
+# Copy ONLY the requirements file first to leverage Docker layer caching
+COPY requirements.txt .
+
+# Install the frozen environment
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # ==============================================================================
-# 4. ACCELERATION LIBRARIES & PIPELINE DEPENDENCIES
+# 4. COMPILE FLASH ATTENTION
 # ==============================================================================
-# Added huggingface_hub, wandb, your pipeline requirements, and pinned pyarrow
-RUN pip3 install --no-cache-dir \
-    peft==0.19.1 \
-    accelerate==1.13.0 \
-    "numpy<2" scipy pandas datasets "pyarrow<15.0.0" pytdc trl bitsandbytes wandb huggingface_hub
-
-# Compile & install specific FlashAttention version
 RUN pip3 install --no-cache-dir flash-attn==2.8.3 --no-build-isolation
 
 # ==============================================================================
 # 5. ENVIRONMENT EXECUTION SETUP
 # ==============================================================================
-WORKDIR /workspace
-
+# Copy the rest of your local code into the container
 COPY . /workspace
 
 RUN chmod +x run_pipeline.sh
