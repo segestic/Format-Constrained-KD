@@ -78,11 +78,17 @@ Alternatively, install the dependencies directly on your host machine:
 conda create -n fc-kd python=3.10 -y
 conda activate fc-kd
 
-pip install --upgrade torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
+# 1. Install PyTorch 2.7.0 strictly compiled for CUDA 12.8 (+cu128)
+pip install torch==2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# 2. Install your baseline requirements
 pip install -r requirements.txt
 
-# Optional, requires a matching CUDA toolchain:
-pip install flash-attn --no-build-isolation
+# 3. Strictly pin your Core AI and Acceleration toolchains to match your specs
+pip install transformers==5.8.1 peft==0.19.1 accelerate==1.13.0
+
+# 4. Install Flash Attention (pinned to 2.8.3)
+pip install flash-attn==2.8.3 --no-build-isolation
 
 ```
 
