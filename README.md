@@ -78,6 +78,9 @@ Alternatively, install the dependencies directly on your host machine:
 conda create -n fc-kd python=3.10 -y
 conda activate fc-kd
 
+# Fix for "No module named 'pkg_resources'"
+pip install "setuptools<70.0.0"
+
 # 1. Install PyTorch 2.7.0 strictly compiled for CUDA 12.8 (+cu128)
 pip install torch==2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
