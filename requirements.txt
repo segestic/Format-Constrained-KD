@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+
 # ==========================================
 # FORMAT-CONSTRAINED KD: FROZEN ENVIRONMENT
 # ==========================================
@@ -27,3 +29,7 @@ pyarrow==14.0.2
 PyTDC==1.0.0
 wandb==0.28.0
 ipywidgets==8.1.8
+
+# 5. CLI & Formatting Utilities (Required by TRL)
+rich
+tyro
