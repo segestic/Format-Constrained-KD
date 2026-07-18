@@ -1,1 +1,2 @@
 # data folder
+# dataset for stage 3 - capacity distillation was generated via script in this folder.
