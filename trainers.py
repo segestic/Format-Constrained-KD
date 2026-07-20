@@ -187,3 +187,51 @@ class PipelineTrainer:
         trainer.model.save_pretrained(output_dir)
 
         self.push_artifacts(trainer, tokenizer, f"{CONFIG['hub_username']}/{CONFIG['s3_output_dir']}-seed{self.seed}")
+
+    #new
+    def run_stage_3b_vanilla_kd(self):
+        print(f"\n🚀 STAGE 3b: VANILLA (UNCONSTRAINED) DISTILLATION | SEED: {self.seed}")
+        clear_gpu_cache()
+
+        input_repo_id = f"{CONFIG['hub_username']}/{CONFIG['s1_output_dir']}-seed{self.seed}"
+        output_dir = f"./{CONFIG['s3b_output_dir']}-seed{self.seed}"
+        synthetic_data_repo = f"olusegunola/primekg-phi3-vanillakd-sft-seed{self.seed}"
+
+        tokenizer = get_tokenizer(input_repo_id)
+
+        print(f"📥 Loading unconstrained teacher dataset from {synthetic_data_repo}...")
+        full_synthetic_dataset = load_dataset(synthetic_data_repo, split="train")
+        syn_split = full_synthetic_dataset.train_test_split(test_size=0.1, seed=self.seed)
+
+        base_student = get_quantized_base_model(CONFIG["student_name"])
+        # Branch from the same Stage 1 adapter as Stage 3, so both distillation
+        # arms start from an identical point in parameter space.
+        model = PeftModel.from_pretrained(base_student, input_repo_id, is_trainable=True)
+
+        trainer = SFTTrainer(
+            model=model,
+            train_dataset=syn_split["train"],
+            eval_dataset=syn_split["test"],
+            tokenizer=tokenizer,
+            args=SFTConfig(
+                dataset_text_field="text",
+                max_seq_length=CONFIG["s3b_max_length"],
+                output_dir=output_dir,
+                num_train_epochs=CONFIG["GLOBAL_EPOCHS"],
+                per_device_train_batch_size=CONFIG["GLOBAL_BATCH_SIZE"],
+                gradient_accumulation_steps=CONFIG["GLOBAL_GRAD_ACCUM"],
+                learning_rate=CONFIG["s3b_lr"],
+                bf16=torch.cuda.is_bf16_supported(),
+                logging_steps=50,
+                eval_strategy="steps",
+                eval_steps=200,
+                save_strategy="no",
+                optim="paged_adamw_8bit",
+            ),
+        )
+        trainer.train()
+        trainer.model.save_pretrained(output_dir)
+        self.push_artifacts(
+            trainer, tokenizer,
+            f"{CONFIG['hub_username']}/{CONFIG['s3b_output_dir']}-seed{self.seed}"
+        )
