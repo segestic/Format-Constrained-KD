@@ -175,18 +175,43 @@ class Evaluator:
             outputs = model(input_ids=inputs["input_ids"], labels=labels)
             return outputs.loss.item()
 
+    @staticmethod
+    def calculate_batched_target_losses(prompts, targets, model, tokenizer):
+        """Batched equivalent of calculate_target_loss: computes per-sequence
+        loss for a whole batch of (prompt, target) pairs in one forward pass."""
+        tokenizer.padding_side = "right"  # required for correct causal masking here
+        full_texts = [p + t for p, t in zip(prompts, targets)]
+        inputs = tokenizer(full_texts, return_tensors="pt", padding=True).to(model.device)
+        labels = inputs["input_ids"].clone()
+
+        for i, p in enumerate(prompts):
+            p_ids = tokenizer(p, add_special_tokens=False)["input_ids"]
+            p_len = len(p_ids)
+            labels[i, :p_len] = -100
+            labels[i, inputs["input_ids"][i] == tokenizer.pad_token_id] = -100
+
+        with torch.no_grad():
+            outputs = model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=labels)
+            shift_logits = outputs.logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            loss = loss.view(shift_labels.size())
+            seq_loss = loss.sum(dim=1) / (shift_labels != -100).sum(dim=1)
+
+        return seq_loss.tolist()
+
     # --------------------------------------------------------------------
     # Main evaluation loop
     # --------------------------------------------------------------------
     def run_evaluation(self):
         all_generated_files = []
-        bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
 
         for base_model_path in self.all_models:
             print(f"\n{'=' * 60}\n🚀 MODEL FAMILY: {base_model_path}\n{'=' * 60}")
 
             for seed in self.seeds:
-                model, base_model, tokenizer, model_name = self._load_model(base_model_path, seed, bnb_config)
+                model, base_model, tokenizer, model_name = self._load_model(base_model_path, seed)
                 model.eval()
 
                 random.seed(seed)
@@ -194,23 +219,12 @@ class Evaluator:
                 torch.manual_seed(seed)
 
                 dataset = self.datasets_by_seed[seed]
-                csv_results = []
-                ext_metrics = {"tp": 0, "fp": 0, "fn": 0, "hallucinations": 0, "topology_violations": 0}
-                rank_metrics = {"correct": 0, "factual_errors": 0, "topology_errors": 0, "hallucination_errors": 0}
-
-                total_time = 0.0
                 torch.cuda.reset_peak_memory_stats()
 
-                for i, example in enumerate(dataset):
-                    row_data, ext_is_correct, rank_error_type, elapsed = self._evaluate_example(
-                        example, model, tokenizer
-                    )
-                    total_time += elapsed
-                    csv_results.append(row_data)
-                    self._update_metrics(ext_metrics, rank_metrics, row_data, ext_is_correct, rank_error_type)
-
-                    if (i + 1) % 100 == 0:
-                        print(f"    Processed {i + 1}/{len(dataset)} iterations...")
+                # Call the newly batched evaluation method
+                csv_results, ext_metrics, rank_metrics, total_time = self._evaluate_dataset_batched(
+                    dataset, model, tokenizer
+                )
 
                 txt_filename, csv_filename = self._write_reports(
                     model_name, base_model_path, seed, csv_results, ext_metrics, rank_metrics, total_time
@@ -228,142 +242,175 @@ class Evaluator:
             print(f"  - {f}")
         return all_generated_files
 
-    def _load_model(self, base_model_path, seed, bnb_config):
+    def _load_model(self, base_model_path, seed):
+        if self.config.get("use_4bit", True):
+            bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+            load_kwargs = {"quantization_config": bnb_config, "device_map": "auto"}
+        else:
+            load_kwargs = {"torch_dtype": torch.bfloat16, "device_map": "auto"}
+
         if base_model_path == self.config["CONTROL_MODEL"]:
             model_name = self.config["CONTROL_MODEL"]
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            base_model = AutoModelForCausalLM.from_pretrained(
-                model_name, quantization_config=bnb_config, device_map="auto"
-            )
+            base_model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
             model = base_model
         else:
             model_name = f"{base_model_path}-seed{seed}"
             tokenizer = AutoTokenizer.from_pretrained(self.config["base_model_name"])
-            base_model = AutoModelForCausalLM.from_pretrained(
-                self.config["base_model_name"], quantization_config=bnb_config, device_map="auto"
-            )
+            base_model = AutoModelForCausalLM.from_pretrained(self.config["base_model_name"], **load_kwargs)
             model = PeftModel.from_pretrained(base_model, model_name)
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         return model, base_model, tokenizer, model_name
 
-    def _evaluate_example(self, example, model, tokenizer):
-        start_time = time.time()
-        ground_truth_name, ground_truth_type = example["y_name"], example["y_type"]
-        source_node = example["x_name"]
+    def _evaluate_dataset_batched(self, dataset, model, tokenizer):
+        batch_size = self.config.get("batch_size", 16)
+        csv_results = []
+        ext_metrics = {"tp": 0, "fp": 0, "fn": 0, "hallucinations": 0, "topology_violations": 0}
+        rank_metrics = {"correct": 0, "factual_errors": 0, "topology_errors": 0, "hallucination_errors": 0}
+        total_time = 0.0
 
-        if self.eval_mode == "robustness":
-            source_node = self.inject_character_swaps(source_node, self.config["noise_level"])
+        for i in range(0, len(dataset), batch_size):
+            batch = dataset[i:i + batch_size]
+            start_time = time.time()
 
-        prompt = (
-            "Task: Analyze the biomedical relationship and output ONLY the Target Node and its Type. "
-            "Do not write explanations, exercises, or extra text.\n\n"
-            f"Source Node: {source_node} (Type: {example['x_type']})\n"
-            f"Relationship: {example['relation']}\n"
-            f"Target Node: "
-        )
+            prompts, ground_truths = [], []
+            for example in batch:
+                source_node = example["x_name"]
+                if self.eval_mode == "robustness":
+                    source_node = self.inject_character_swaps(source_node, self.config["noise_level"])
+                prompt = (
+                    "Task: Analyze the biomedical relationship and output ONLY the Target Node and its Type. "
+                    "Do not write explanations, exercises, or extra text.\n\n"
+                    f"Source Node: {source_node} (Type: {example['x_type']})\n"
+                    f"Relationship: {example['relation']}\n"
+                    f"Target Node: "
+                )
+                prompts.append(prompt)
+                ground_truths.append((example["y_name"], example["y_type"]))
 
-        # --- PASS A: Zero-shot generative extraction ---
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=self.config["max_new_tokens"],
-                pad_token_id=tokenizer.eos_token_id,
-                do_sample=False,
-            )
-        full_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        ext_name, ext_type, raw_gen = self.parse_extraction_output(full_text, prompt)
+            # --- PASS A: batched zero-shot generative extraction ---
+            tokenizer.padding_side = "left"
+            inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=self.config["max_new_tokens"],
+                    pad_token_id=tokenizer.eos_token_id,
+                    do_sample=False,
+                )
+            gen_tokens = outputs[:, inputs["input_ids"].shape[1]:]
+            gen_texts = tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)
 
-        # --- BUG FIX: both sides of the exact-match comparison are now
-        # normalized identically (.strip().lower()) ---
-        ext_name_norm = ext_name.strip().lower() if ext_name else None
-        gt_name_norm = ground_truth_name.strip().lower()
-        ext_is_correct = False
+            ext_data = []
+            for b_idx, gen_text in enumerate(gen_texts):
+                gt_name, gt_type = ground_truths[b_idx]
+                ext_name, ext_type, raw_gen = self.parse_extraction_output(gen_text, "")
+                ext_name_norm = ext_name.strip().lower() if ext_name else None
+                gt_name_norm = gt_name.strip().lower()
+                ext_is_correct = False
 
-        if not ext_name:
-            ext_class = "fn"
-        elif ext_name_norm not in self.valid_nodes:
-            ext_class = "hallucination"
-        elif (
-            ext_name_norm in self.valid_node_types
-            and self.valid_node_types[ext_name_norm] != ext_type
-            and ext_type != "Unknown"
-        ):
-            ext_class = "topology_violation"
-        elif ext_name_norm == gt_name_norm:
-            ext_class = "tp"
-            ext_is_correct = True
-        else:
-            ext_class = "fp_fn"
+                if not ext_name:
+                    ext_class = "fn"
+                elif ext_name_norm not in self.valid_nodes:
+                    ext_class = "hallucination"
+                elif (ext_name_norm in self.valid_node_types
+                      and self.valid_node_types[ext_name_norm] != ext_type
+                      and ext_type != "Unknown"):
+                    ext_class = "topology_violation"
+                elif ext_name_norm == gt_name_norm:
+                    ext_class = "tp"
+                    ext_is_correct = True
+                else:
+                    ext_class = "fp_fn"
 
-        # --- PASS B: Adversarial generative ranking ---
-        same_type_nodes = [n for n in self.ontology_dict[ground_truth_type] if n != ground_truth_name]
-        factual_trap = random.choice(same_type_nodes) if same_type_nodes else "Generic_Biomolecule"
+                ext_data.append({
+                    "Ext_Predicted": ext_name if ext_name else "FAILED",
+                    "Ext_Class": ext_class,
+                    "Ext_Is_Correct": int(ext_is_correct),
+                    "Raw_Output": raw_gen,
+                })
 
-        wrong_types = [t for t in self.ontology_dict.keys() if t != ground_truth_type]
-        if wrong_types:
-            random_wrong_type = random.choice(wrong_types)
-            topology_trap = random.choice(self.ontology_dict[random_wrong_type])
-            topology_trap_type = random_wrong_type
-        else:
-            topology_trap = f"Topology_Violation_Sim_{random.randint(1000, 9999)}"
-            topology_trap_type = "Simulated_Type"
+            # --- PASS B: batched adversarial generative ranking ---
+            all_rank_prompts, all_rank_targets, all_rank_mappings = [], [], []
+            for b_idx, example in enumerate(batch):
+                gt_name, gt_type = ground_truths[b_idx]
+                same_type_nodes = [n for n in self.ontology_dict[gt_type] if n != gt_name]
+                factual_trap = random.choice(same_type_nodes) if same_type_nodes else "Generic_Biomolecule"
+                wrong_types = [t for t in self.ontology_dict.keys() if t != gt_type]
+                if wrong_types:
+                    random_wrong_type = random.choice(wrong_types)
+                    topology_trap = random.choice(self.ontology_dict[random_wrong_type])
+                    topology_trap_type = random_wrong_type
+                else:
+                    topology_trap = f"Topology_Violation_Sim_{random.randint(1000, 9999)}"
+                    topology_trap_type = "Simulated_Type"
+                hallucination_trap = f"BioNode_{random.randint(10000, 99999)}"
 
-        hallucination_trap = f"BioNode_{random.randint(10000, 99999)}"
+                options = [
+                    (f"{gt_name} (Type: {gt_type})", "Correct"),
+                    (f"{factual_trap} (Type: {gt_type})", "Factual_Error"),
+                    (f"{topology_trap} (Type: {topology_trap_type})", "Topology_Error"),
+                    (f"{hallucination_trap} (Type: Unknown)", "Hallucination_Error"),
+                ]
+                random.shuffle(options)
+                for target_text, error_type in options:
+                    all_rank_prompts.append(prompts[b_idx])
+                    all_rank_targets.append(target_text)
+                    all_rank_mappings.append((b_idx, target_text, error_type))
 
-        option_mapping = {
-            f"{ground_truth_name} (Type: {ground_truth_type})": "Correct",
-            f"{factual_trap} (Type: {ground_truth_type})": "Factual_Error",
-            f"{topology_trap} (Type: {topology_trap_type})": "Topology_Error",
-            f"{hallucination_trap} (Type: Unknown)": "Hallucination_Error",
-        }
-        options = list(option_mapping.keys())
-        random.shuffle(options)
-        option_losses = {opt: self.calculate_target_loss(prompt, opt, model, tokenizer) for opt in options}
-        rank_pred_string = min(option_losses, key=option_losses.get)
-        rank_error_type = option_mapping[rank_pred_string]
+            losses = self.calculate_batched_target_losses(all_rank_prompts, all_rank_targets, model, tokenizer)
+            batch_loss_results = {b: [] for b in range(len(batch))}
+            for loss, (b_idx, target_text, error_type) in zip(losses, all_rank_mappings):
+                batch_loss_results[b_idx].append((loss, target_text, error_type))
 
-        row_data = {
-            "Source_Node": example["x_name"],
-            "Relation": example["relation"],
-            "Ground_Truth": ground_truth_name,
-            "Ext_Predicted": ext_name if ext_name else "FAILED",
-            "Ext_Class": ext_class,
-            "Ext_Is_Correct": int(ext_is_correct),
-            "Raw_Output": raw_gen,
-            "Rank_Predicted": rank_pred_string.split(" (Type:")[0],
-            "Rank_Error_Type": rank_error_type,
-            "Rank_Is_Correct": int(rank_error_type == "Correct"),
-        }
-        return row_data, ext_is_correct, rank_error_type, time.time() - start_time
+            for b_idx in range(len(batch)):
+                _, best_target, rank_error_type = min(batch_loss_results[b_idx], key=lambda x: x[0])
 
-    @staticmethod
-    def _update_metrics(ext_metrics, rank_metrics, row_data, ext_is_correct, rank_error_type):
-        ext_class = row_data["Ext_Class"]
-        if ext_class == "fn":
-            ext_metrics["fn"] += 1
-        elif ext_class == "hallucination":
-            ext_metrics["hallucinations"] += 1
-            ext_metrics["fp"] += 1
-        elif ext_class == "topology_violation":
-            ext_metrics["topology_violations"] += 1
-            ext_metrics["fp"] += 1
-        elif ext_class == "tp":
-            ext_metrics["tp"] += 1
-        else:  # fp_fn: well-formed but wrong entity
-            ext_metrics["fp"] += 1
-            ext_metrics["fn"] += 1
+                row_data = {
+                    "Source_Node": batch[b_idx]["x_name"],
+                    "Relation": batch[b_idx]["relation"],
+                    "Ground_Truth": ground_truths[b_idx][0],
+                    "Ext_Predicted": ext_data[b_idx]["Ext_Predicted"],
+                    "Ext_Class": ext_data[b_idx]["Ext_Class"],
+                    "Ext_Is_Correct": ext_data[b_idx]["Ext_Is_Correct"],
+                    "Raw_Output": ext_data[b_idx]["Raw_Output"],
+                    "Rank_Predicted": best_target.split(" (Type:")[0],
+                    "Rank_Error_Type": rank_error_type,
+                    "Rank_Is_Correct": int(rank_error_type == "Correct"),
+                }
+                csv_results.append(row_data)
 
-        if rank_error_type == "Correct":
-            rank_metrics["correct"] += 1
-        elif rank_error_type == "Factual_Error":
-            rank_metrics["factual_errors"] += 1
-        elif rank_error_type == "Topology_Error":
-            rank_metrics["topology_errors"] += 1
-        elif rank_error_type == "Hallucination_Error":
-            rank_metrics["hallucination_errors"] += 1
+                # --- Inlined Metrics Update ---
+                ext_class = row_data["Ext_Class"]
+                if ext_class == "fn":
+                    ext_metrics["fn"] += 1
+                elif ext_class == "hallucination":
+                    ext_metrics["hallucinations"] += 1
+                    ext_metrics["fp"] += 1
+                elif ext_class == "topology_violation":
+                    ext_metrics["topology_violations"] += 1
+                    ext_metrics["fp"] += 1
+                elif ext_class == "tp":
+                    ext_metrics["tp"] += 1
+                else:  # fp_fn
+                    ext_metrics["fp"] += 1
+                    ext_metrics["fn"] += 1
+
+                if rank_error_type == "Correct":
+                    rank_metrics["correct"] += 1
+                elif rank_error_type == "Factual_Error":
+                    rank_metrics["factual_errors"] += 1
+                elif rank_error_type == "Topology_Error":
+                    rank_metrics["topology_errors"] += 1
+                elif rank_error_type == "Hallucination_Error":
+                    rank_metrics["hallucination_errors"] += 1
+
+            total_time += (time.time() - start_time)
+            print(f"    Processed {min(i + batch_size, len(dataset))}/{len(dataset)} iterations...")
+
+        return csv_results, ext_metrics, rank_metrics, total_time
 
     def _write_reports(self, model_name, base_model_path, seed, csv_results, ext_metrics, rank_metrics, total_time):
         N = len(csv_results)
