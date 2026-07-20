@@ -81,6 +81,10 @@ EVAL_CONFIG = {
         # "olusegunola/phi-1.5-primekg-orpo",
     ],
     "output_dir": "./eval_outputs",
+    # --- NEW: speed settings ---
+    "batch_size": 16,   # raise to 32/64 if VRAM allows
+    "use_4bit": True,   # keep True to stay consistent with prior 4-bit runs;
+                         # flip to False only if re-running ALL arms fresh
 }
 EVAL_CONFIG["ALL_MODELS"] = EVAL_CONFIG["CUSTOM_MODELS"] + [EVAL_CONFIG["CONTROL_MODEL"]]
 
