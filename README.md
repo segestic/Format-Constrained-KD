@@ -151,7 +151,7 @@ docker run --gpus all -it --rm \
 
 ```
 
-*Black-box distillation script:*
+*FC-KD teacher-generation script:*
 
 ```bash
 docker run --gpus all -it --rm \
