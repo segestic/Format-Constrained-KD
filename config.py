@@ -24,10 +24,10 @@ import torch
 # ==============================================================================
 # TRAINING CONFIGURATION (Stages 1-3)
 # ==============================================================================
-ACTIVE_STAGE = 3  # 1 = SFT, 2 = ORPO, 3 = FC-KD, 4 = Evaluation
+ACTIVE_STAGE = "3b"  # 1 = SFT, 2 = ORPO, 3 = FC-KD, 4 = Evaluation
 
 CONFIG = {
-    "RUN_SEED": 999,
+    "RUN_SEED": 999, #42, 101, 999
     "GLOBAL_SAMPLE_CAP": 2000,
 
     "teacher_name": "microsoft/Phi-3-mini-4k-instruct",
@@ -56,6 +56,18 @@ CONFIG = {
     "s3_lr": 5e-5,
     "s3_max_length": 512,
     "s3_output_dir": "phi-1.5-primekg-dkd",
+
+    # --- Stage 3b: Vanilla (Unconstrained) Sequence-Level Distillation ---
+    # Ablation arm: same teacher, same student, same loss, same seeds, same
+    # LoRA branch point as Stage 3 -- the ONLY thing that differs is the
+    # dataset it trains on (unconstrained teacher completions instead of
+    # format-constrained/regex-filtered ones). All hyperparameters are kept
+    # identical to Stage 3 on purpose, so a performance gap can only be
+    # attributed to the training data's format constraint, not to a
+    # confounded change in learning rate, sequence length, or epochs.
+    "s3b_lr": 5e-5,
+    "s3b_max_length": 512,
+    "s3b_output_dir": "phi-1.5-primekg-vanillakd",
 }
 
 # ==============================================================================
@@ -77,6 +89,7 @@ EVAL_CONFIG = {
     "CONTROL_MODEL": "microsoft/Phi-3.5-mini-instruct",
     "CUSTOM_MODELS": [
         "olusegunola/phi-1.5-primekg-dkd",
+        "olusegunola/phi-1.5-primekg-vanillakd",   # <-- Stage 3b ablation arm
         # "olusegunola/phi-1.5-primekg-sft",
         # "olusegunola/phi-1.5-primekg-orpo",
     ],
@@ -84,7 +97,7 @@ EVAL_CONFIG = {
     # --- NEW: speed settings ---
     "batch_size": 16,   # raise to 32/64 if VRAM allows
     "use_4bit": True,   # keep True to stay consistent with prior 4-bit runs;
-                         # flip to False only if re-running ALL arms fresh
+                         # flip to False only if re-running ALL
 }
 EVAL_CONFIG["ALL_MODELS"] = EVAL_CONFIG["CUSTOM_MODELS"] + [EVAL_CONFIG["CONTROL_MODEL"]]
 
