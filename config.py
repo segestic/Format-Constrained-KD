@@ -86,7 +86,7 @@ EVAL_CONFIG = {
     "noise_level": 0.10,  # robustness mode: character-swap noise fraction
 
     "SEEDS_TO_EVAL": [42, 101, 999],
-    "CONTROL_MODEL": "microsoft/Phi-3.5-mini-instruct",
+    "CONTROL_MODEL": "microsoft/phi-1_5",
     "CUSTOM_MODELS": [
         "olusegunola/phi-1.5-primekg-dkd",
         "olusegunola/phi-1.5-primekg-vanillakd",   # <-- Stage 3b ablation arm
