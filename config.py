@@ -90,8 +90,8 @@ EVAL_CONFIG = {
     "CUSTOM_MODELS": [
         "olusegunola/phi-1.5-primekg-dkd",
         "olusegunola/phi-1.5-primekg-vanillakd",   # <-- Stage 3b ablation arm
-        # "olusegunola/phi-1.5-primekg-sft",
-        # "olusegunola/phi-1.5-primekg-orpo",
+        "olusegunola/phi-1.5-primekg-sft",
+        "olusegunola/phi-1.5-primekg-orpo",
     ],
     "output_dir": "./eval_outputs",
     # --- NEW: speed settings ---
