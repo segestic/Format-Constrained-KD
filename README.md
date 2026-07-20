@@ -124,12 +124,41 @@ chmod +x run_pipeline.sh
 
 Execute the pipeline by injecting your API tokens at runtime:
 
+> **Note on Data Pipelines vs. Experiments:**
+> The default pipeline runs the main experiment (`main.py`). By default, `trainers.py` will use the pre-generated datasets from the author's Hugging Face repository. If you are running the data pipeline scripts to generate the datasets yourself, **remember to change the `hub_username` in `config.py**` to your own Hugging Face username so the scripts can upload the results to your account.
+
+**1. Run the default pipeline (`main.py`)** (Executes the core experiment stages):
+
 ```bash
 docker run --gpus all -it --rm \
   -e HF_TOKEN="your_hf_token_here" \
   -e WANDB_API_KEY="your_wandb_token_here" \
   -v $(pwd):/workspace \
   format-constrained-kd bash run_pipeline.sh
+
+```
+
+**2. Run the data pipeline scripts** (Used only if generating the datasets from scratch):
+
+*Vanilla-KD teacher-generation script:*
+
+```bash
+docker run --gpus all -it --rm \
+  -e HF_TOKEN="your_hf_token_here" \
+  -e WANDB_API_KEY="your_wandb_token_here" \
+  -v $(pwd):/workspace \
+  format-constrained-kd bash run_pipeline.sh data/distill_vanilla_kd.py
+
+```
+
+*Black-box distillation script:*
+
+```bash
+docker run --gpus all -it --rm \
+  -e HF_TOKEN="your_hf_token_here" \
+  -e WANDB_API_KEY="your_wandb_token_here" \
+  -v $(pwd):/workspace \
+  format-constrained-kd bash run_pipeline.sh data/black_box_distill.py
 
 ```
 
