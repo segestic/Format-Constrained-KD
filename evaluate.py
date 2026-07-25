@@ -57,7 +57,7 @@ class Evaluator:
     def prepare_data(self):
         print(f"\n[Mode: {self.eval_mode.upper()}] Loading evaluation data matrix...")
 
-        if self.eval_mode == "cross_domain":
+        if self.eval_mode in ["cross_domain", "robustness"]:
             df = self._load_pharmgkb()
         else:
             df = self._load_primekg()
