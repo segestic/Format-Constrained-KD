@@ -11,13 +11,6 @@ reported in the manuscript) evaluates PrimeKG-trained models on PharmGKB, a
 graph never seen during training. EVAL_MODE="standard" evaluates against a
 held-out PrimeKG split instead, and exists only as an internal sanity check
 against in-domain performance -- it is NOT used for any reported result.
-
-Bug fix vs. earlier draft
---------------------------
-Ground-truth strings are now normalized with the same `.strip().lower()`
-as the parsed model prediction. The previous version stripped only the
-prediction, so trailing/leading whitespace in source TSV fields could
-cause false exact-match failures independent of true model behavior.
 """
 
 import gc
