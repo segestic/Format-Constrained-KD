@@ -96,7 +96,8 @@ class Evaluator:
 
         if not os.path.exists(zip_path):
             print("📥 Downloading PharmGKB relationships.zip...")
-            url = "https://api.pharmgkb.org/v1/download/file/data/relationships.zip"
+            #url = "https://api.pharmgkb.org/v1/download/file/data/relationships.zip" #former url changed July2026
+            url = "https://api.clinpgx.org/v1/download/file/data/relationships.zip"
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req) as response, open(zip_path, "wb") as out_file:
                 out_file.write(response.read())
