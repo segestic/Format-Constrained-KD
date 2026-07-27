@@ -37,16 +37,14 @@ CONFIG = {
 
 SEEDS_TO_EVAL = [42, 101, 999]
 
-#CONTROL_MODEL = "microsoft/phi-1_5"
+CONTROL_MODEL = "microsoft/phi-1_5"
 
-CONTROL_MODEL = "microsoft/Phi-3.5-mini-instruct"
 CUSTOM_MODELS = [
     "olusegunola/phi-1.5-primekg-dkd",
     "olusegunola/phi-1.5-primekg-sft",
     "olusegunola/phi-1.5-primekg-orpo"
 ]
 
-#ALL_MODELS = [CONTROL_MODEL] + CUSTOM_MODELS
 ALL_MODELS = CUSTOM_MODELS + [CONTROL_MODEL]
 
 
@@ -65,7 +63,8 @@ if CONFIG["EVAL_MODE"] == "cross_domain":
 
     if not os.path.exists(zip_path):
         print("📥 Downloading PharmGKB relationships.zip...")
-        url = "https://api.pharmgkb.org/v1/download/file/data/relationships.zip"
+        #url = "https://api.pharmgkb.org/v1/download/file/data/relationships.zip"
+        url = "https://api.clinpgx.org/v1/download/file/data/relationships.zip"
         req = urllib.request.Request(
             url,
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
