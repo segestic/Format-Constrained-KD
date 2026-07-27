@@ -25,7 +25,7 @@ import torch
 # TRAINING CONFIGURATION (Stages 1-3)
 # ==============================================================================
 # Note: Use integers for 1, 2, 4. Only stage "3b" requires quotes.
-ACTIVE_STAGE = "3b"  # 1 = SFT, 2 = ORPO, 3 = FC-KD, 4 = Evaluation
+ACTIVE_STAGE = "3b"  # 1 = SFT, 2 = ORPO, 3 = FC-KD, "3b" = Vanilla-KD,  4 = Evaluation
 
 CONFIG = {
     "RUN_SEED": 999, #42, 101, 999
