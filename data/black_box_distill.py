@@ -55,7 +55,7 @@ teacher = AutoModelForCausalLM.from_pretrained(
     quantization_config=bnb_config,
     device_map="auto",
     attn_implementation=attn_impl,
-    trust_remote_code=True
+    trust_remote_code=False
 )
 teacher.eval()
 print("✅ Teacher model loaded and configured for Left-Padded Batching.")
