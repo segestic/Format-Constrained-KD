@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import gc
 import torch
@@ -9,19 +10,24 @@ from datasets import Dataset
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from tdc.resource import PrimeKG
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from config import CONFIG, EVAL_CONFIG, setup_environment, set_global_seed, get_attn_impl
 
 # ==============================================================================
 # 0. CONFIGURATION
 # ==============================================================================
-SEEDS = [42, 101, 999]
-GLOBAL_SAMPLE_CAP = 2000
-TEACHER_MODEL = "microsoft/Phi-3-mini-4k-instruct"
-HUB_USERNAME = "olusegunola"
 
+# Call this right after imports:
+setup_environment()
+
+# Replace your Section 0 variables with this:
+SEEDS = EVAL_CONFIG["SEEDS_TO_EVAL"]
+GLOBAL_SAMPLE_CAP = CONFIG["GLOBAL_SAMPLE_CAP"]
+TEACHER_MODEL = CONFIG["teacher_name"]
+HUB_USERNAME = CONFIG["hub_username"]
 # 🚀 HIGH-SPEED INFERENCE SETTING
 # If you have 24GB VRAM, try 32 or 64. If you have 80GB VRAM, try 128 or 256.
-INFERENCE_BATCH_SIZE = 64 
-
+INFERENCE_BATCH_SIZE = EVAL_CONFIG.get("batch_size", 32)
 # ==============================================================================
 # 1. LOAD DATA ONCE
 # ==============================================================================

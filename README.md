@@ -19,6 +19,29 @@ Standard autoregressive fine-tuning forces a model to simultaneously learn graph
 
 ---
 
+## Quickstart
+
+The pipeline has five stages, run one at a time by editing `ACTIVE_STAGE` in `config.py`. Two of them (Stage 3 and Stage 3b) need a dataset produced by a separate generation script — generate those before touching the numbered stages. Running a stage before its dependency exists stops with an error naming the missing artifact and the command needed to produce it.
+
+| Step | What to run | What it produces |
+|---|---|---|
+| 1 | `export HF_HUB_USERNAME=your-username` | — sets where all models/datasets are read from and pushed to |
+| 2 | `python data/black_box_distill.py` | `primekg-phi3-distilled-sft-seed{N}` — required for Stage 3 |
+| 3 | `python data/distill_vanilla_kd.py` | `primekg-phi3-vanillakd-sft-seed{N}` — required for Stage 3b |
+| 4 | `ACTIVE_STAGE = 1` → run the pipeline | `phi-1.5-primekg-sft-seed{N}` (SFT checkpoint) |
+| 5 | `ACTIVE_STAGE = 2` → run the pipeline | `phi-1.5-primekg-orpo-seed{N}` (ORPO checkpoint) |
+| 6 | `ACTIVE_STAGE = 3` → run the pipeline | `phi-1.5-primekg-dkd-seed{N}` (FC-KD checkpoint) |
+| 7 | `ACTIVE_STAGE = "3b"` → run the pipeline | `phi-1.5-primekg-vanillakd-seed{N}` (ablation checkpoint) |
+| 8 | `ACTIVE_STAGE = 4` → run the pipeline | Evaluation metrics in `EVAL_CONFIG["output_dir"]` |
+
+Steps 4–7 each need to be repeated once per seed (`42`, `101`, `999`) by changing `CONFIG["RUN_SEED"]` between runs, to reproduce the paper's three-seed averages. Stage 3 and 3b both branch from the Stage 1 checkpoint, so Stage 1 must complete first; Stage 4 evaluation needs whichever checkpoints you want to evaluate to already exist for that seed.
+
+"Run the pipeline" means `./run_pipeline.sh` (local) or the equivalent `docker run` command (Docker) — see below for exact commands for each.
+
+W&B logging is optional. If `WANDB_API_KEY` is not set, the pipeline runs with local-only logging and no W&B account is required.
+
+---
+
 ## Cross-Domain Evaluation Protocol
 
 **Training and evaluation use two different, non-overlapping knowledge graphs.**
@@ -59,130 +82,116 @@ fc-kd-repo/
 
 ## Setup & Installation
 
-We provide two ways to run this pipeline. We highly recommend using Docker to ensure reproducible FlashAttention compilation and avoid CUDA/PyTorch dependency conflicts.
+Two ways to run this pipeline: Docker (recommended, for reproducible FlashAttention compilation and no CUDA/PyTorch dependency conflicts) or a local Conda environment. Pick one and follow it end-to-end — the steps below are self-contained per option.
 
-### Option A: Docker (Recommended)
+### Option A: Docker
 
-Build the container image. This process installs all system dependencies, the correct PyTorch wheel, and compiles FlashAttention for the target architecture.
+**1. Build the image.** This installs all system dependencies, the correct PyTorch wheel, and compiles FlashAttention for the target architecture. The container is already set up to execute `run_pipeline.sh` on its own, so no manual `chmod` is needed on this path.
 
 ```bash
 docker build -t format-constrained-kd .
-
 ```
+
+**2. Set your Hugging Face username** (used to build every model/dataset path the pipeline reads from or pushes to):
+
+```bash
+export HF_HUB_USERNAME=your-username-here
+```
+
+**3. Generate the Stage 3 / 3b datasets.** Stages 3 and 3b train on teacher-model completions rather than on PrimeKG directly, so these need to exist before you run those stages:
+
+```bash
+# Vanilla-KD teacher-generation script:
+docker run --gpus all -it --rm \
+  -e HF_TOKEN="your_hf_token_here" \
+  -e WANDB_API_KEY="your_wandb_token_here" \
+  -e HF_HUB_USERNAME="$HF_HUB_USERNAME" \
+  -v $(pwd):/workspace \
+  format-constrained-kd bash run_pipeline.sh data/distill_vanilla_kd.py
+
+# FC-KD teacher-generation script:
+docker run --gpus all -it --rm \
+  -e HF_TOKEN="your_hf_token_here" \
+  -e WANDB_API_KEY="your_wandb_token_here" \
+  -e HF_HUB_USERNAME="$HF_HUB_USERNAME" \
+  -v $(pwd):/workspace \
+  format-constrained-kd bash run_pipeline.sh data/black_box_distill.py
+```
+
+Each script pushes its output dataset to `{HF_HUB_USERNAME}/...` on the Hub. If you already have access to someone else's copy of these datasets, point to their account instead of generating your own: `-e SYNTHETIC_DATA_OWNER="their-account-name"`.
+
+**4. Set `ACTIVE_STAGE` in `config.py`** to the stage you want to run (see the Quickstart table above), then run the main pipeline:
+
+```bash
+docker run --gpus all -it --rm \
+  -e HF_TOKEN="your_hf_token_here" \
+  -e WANDB_API_KEY="your_wandb_token_here" \
+  -e HF_HUB_USERNAME="$HF_HUB_USERNAME" \
+  -v $(pwd):/workspace \
+  format-constrained-kd bash run_pipeline.sh
+```
+
+`WANDB_API_KEY` is optional — omit it to run with local-only logging. `-v $(pwd):/workspace` live-mounts your working directory, so edits to `config.py` on the host (e.g. changing `ACTIVE_STAGE` or `CONFIG["RUN_SEED"]`) take effect on the next run without rebuilding the image. PrimeKG and PharmGKB are downloaded and cached to `./data` automatically on first use.
 
 ### Option B: Local Conda Environment
 
-Alternatively, install the dependencies directly on your host machine:
+**1. Create the environment and install dependencies:**
 
 ```bash
 conda create -n fc-kd python=3.10 -y
 conda activate fc-kd
 
-# 1. Fix for "No module named 'pkg_resources'"
+# Fix for "No module named 'pkg_resources'"
 pip install "setuptools<70.0.0" wheel packaging ninja
 
-# 2. Install PyTorch 2.7.0 strictly compiled for CUDA 12.8 (+cu128)
+# Install PyTorch 2.7.0 strictly compiled for CUDA 12.8 (+cu128)
 pip install torch==2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-# 3. Install your baseline requirements first
+# Install baseline requirements
 pip install -r requirements.txt
 
-# 4. Strictly pin your Core AI toolchains to match your WORKING Docker specs
-# Grouped together here so Pip cannot silently downgrade them!
+# Pin core AI toolchains (grouped together so pip cannot silently downgrade them)
 pip install transformers==4.57.6 trl==0.11.4 peft==0.19.1 accelerate==1.13.0
 
-# 5. Install Flash Attention (pinned to 2.8.3)
+# Install Flash Attention
 pip install flash-attn==2.8.3 --no-build-isolation
-
 ```
 
-*Note: If using the local environment, you must authenticate with Hugging Face and Weights & Biases manually using `hf auth login` and `wandb login`.*
-
----
-
-Everything is controlled through `config.py` to keep runs fully reproducible without command-line argument sprawl.
-
-1. **Set your Hugging Face username:** Open `config.py` and change `"hub_username"` to your own Hugging Face account name. If you skip this, the script will attempt to upload models to the author's repository and crash with a `403 Forbidden` error.
-2. **Select the active stage:** In `config.py`, set `ACTIVE_STAGE`:
-   - `1` — Structural SFT Warm-Up (PrimeKG)
-   - `2` — Topology-Anchored ORPO (PrimeKG, branches from Stage 1)
-   - `3` — Format-Constrained KD / FC-KD (PrimeKG, branches from Stage 1)
-   - `4` — Dual-Modality Evaluation (PharmGKB, cross-domain zero-shot)
-3. **Configure evaluation:** For Stage 4, confirm `EVAL_CONFIG["EVAL_MODE"]` — leave as `"cross_domain"` to reproduce the paper's results.
-
-
-### Using Docker (Live Mount)
-
-The Docker execution uses a live volume mount (`-v $(pwd):/workspace`). This means you can change `config.py` on your host machine, save it, and instantly run the next stage without rebuilding the image. Output models and data caches are safely saved to your host drive.
-
-First, ensure the script is executable (only needed once):
+**2. Make the wrapper script executable** (only needed once — this is a host-side permission, not something Docker needs since the image sets it during build):
 
 ```bash
 chmod +x run_pipeline.sh
-
 ```
 
-Execute the pipeline by injecting your API tokens at runtime:
-
-> **Note on Data Pipelines vs. Experiments:**
-> The default pipeline runs the main experiment (`main.py`). By default, `trainers.py` will use the pre-generated datasets from the author's Hugging Face repository. If you are running the data pipeline scripts to generate the datasets yourself, **remember to change the `hub_username` in `config.py**` to your own Hugging Face username so the scripts can upload the results to your account.
-
-**1. Run the default pipeline (`main.py`)** (Executes the core experiment stages):
+**3. Set your environment variables:**
 
 ```bash
-docker run --gpus all -it --rm \
-  -e HF_TOKEN="your_hf_token_here" \
-  -e WANDB_API_KEY="your_wandb_token_here" \
-  -v $(pwd):/workspace \
-  format-constrained-kd bash run_pipeline.sh
-
+export HF_HUB_USERNAME=your-username-here
+export HF_TOKEN=your_hf_token_here
+export WANDB_API_KEY=your_wandb_token_here   # optional — omit to run with local-only logging
 ```
 
-**2. Run the data pipeline scripts** (Used only if generating the datasets from scratch):
-
-*Vanilla-KD teacher-generation script:*
+**4. Generate the Stage 3 / 3b datasets** (required before running those stages; skip if you already have them or are pointing to `SYNTHETIC_DATA_OWNER`):
 
 ```bash
-docker run --gpus all -it --rm \
-  -e HF_TOKEN="your_hf_token_here" \
-  -e WANDB_API_KEY="your_wandb_token_here" \
-  -v $(pwd):/workspace \
-  format-constrained-kd bash run_pipeline.sh data/distill_vanilla_kd.py
-
+./run_pipeline.sh data/black_box_distill.py     # produces the Stage 3 (FC-KD) dataset
+./run_pipeline.sh data/distill_vanilla_kd.py    # produces the Stage 3b (Vanilla-KD) dataset
 ```
 
-*FC-KD teacher-generation script:*
+**5. Set `ACTIVE_STAGE` in `config.py`** to the stage you want to run (see the Quickstart table above), then run the pipeline:
 
 ```bash
-docker run --gpus all -it --rm \
-  -e HF_TOKEN="your_hf_token_here" \
-  -e WANDB_API_KEY="your_wandb_token_here" \
-  -v $(pwd):/workspace \
-  format-constrained-kd bash run_pipeline.sh data/black_box_distill.py
-
-```
-
-### Using Local Environment
-
-If you installed the requirements via Conda instead of Docker, execute the wrapper script directly:
-
-```bash
-chmod +x run_pipeline.sh
 ./run_pipeline.sh
-
 ```
 
 PrimeKG and PharmGKB are downloaded and cached to `./data` automatically on first use.
 
 ---
 
-
----
-
 ## Reproducibility Notes
 
 - **Seeds:** All reported results are averaged over three independent seeds (`42`, `101`, `999`), set via `CONFIG["RUN_SEED"]` (training) and `EVAL_CONFIG["SEEDS_TO_EVAL"]` (evaluation).
-- **Ground-truth normalization fix:** Strict Exact Match comparisons normalize both the predicted and ground-truth strings identically (`.strip().lower()`). An earlier internal draft of this evaluation script normalized only the model's prediction, which could produce false exact-match failures from incidental whitespace in source data — this is fixed in the current `evaluate.py`.
+- **Ground-truth normalization:** Strict Exact Match comparisons normalize both the predicted and ground-truth strings identically (`.strip().lower()`) before comparison, avoiding false mismatches from incidental whitespace or casing differences in the source data.
 - **Attention implementation:** `flash_attention_2` is selected automatically when the host GPU reports compute capability ≥ 8.0 (`models.get_attn_impl()`), falling back to eager attention otherwise. This is applied consistently across all three training stages and affects throughput only, not the numerical results reported in the paper.
 - **Stage branching:** Both Stage 2 (ORPO) and Stage 3 (FC-KD) load their base adapter from the **Stage 1** checkpoint, not from each other — this is intentional, to keep the two optimization branches isolated for the ablation comparison (see paper Section 3.1).
 

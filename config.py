@@ -35,7 +35,15 @@ CONFIG = {
     "student_name": "microsoft/phi-1_5",
 
     "push_to_hub": True,
-    "hub_username": "olusegunola",
+    # Override via `export HF_HUB_USERNAME=your-username` to push/pull from a
+    # different account. Defaults to the author's account for local dev use.
+    "hub_username": os.environ.get("HF_HUB_USERNAME", "olusegunola"),
+
+    # Owner of the pre-generated synthetic teacher-completion datasets used
+    # by Stage 3 / Stage 3b. Defaults to hub_username. Override with
+    # `export SYNTHETIC_DATA_OWNER=some-account` only if pulling someone
+    # else's already-pushed synthetic datasets.
+    "synthetic_data_owner": os.environ.get("SYNTHETIC_DATA_OWNER", os.environ.get("HF_HUB_USERNAME", "olusegunola")),
 
     "GLOBAL_EPOCHS": 3,
     "GLOBAL_BATCH_SIZE": 16,
@@ -89,10 +97,10 @@ EVAL_CONFIG = {
     "SEEDS_TO_EVAL": [42, 101, 999],
     "CONTROL_MODEL": "microsoft/phi-1_5",
     "CUSTOM_MODELS": [
-        "olusegunola/phi-1.5-primekg-dkd",
-        "olusegunola/phi-1.5-primekg-vanillakd",   # <-- Stage 3b ablation arm
-        "olusegunola/phi-1.5-primekg-sft",
-        "olusegunola/phi-1.5-primekg-orpo",
+        f"{os.environ.get('HF_HUB_USERNAME', 'olusegunola')}/phi-1.5-primekg-dkd",
+        f"{os.environ.get('HF_HUB_USERNAME', 'olusegunola')}/phi-1.5-primekg-vanillakd",   # <-- Stage 3b ablation arm
+        f"{os.environ.get('HF_HUB_USERNAME', 'olusegunola')}/phi-1.5-primekg-sft",
+        f"{os.environ.get('HF_HUB_USERNAME', 'olusegunola')}/phi-1.5-primekg-orpo",
     ],
     "output_dir": "./eval_outputs",
     # --- NEW: speed settings ---
@@ -118,9 +126,19 @@ def setup_environment():
     """Configures system-level optimizations and W&B logging."""
     os.environ["TRL_EXPERIMENTAL_SILENCE"] = "1"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    os.environ["WANDB_PROJECT"] = "phi_1_5_distillation_NEW_graph1_v2"
-    os.environ["WANDB_ENTITY"] = "olusegunodewole1"
-    os.environ["WANDB_LOG_MODEL"] = "checkpoint"
+
+    # If no WANDB_API_KEY is set, disable W&B entirely rather than letting
+    # wandb.login() hang on an interactive prompt or crash inside a
+    # non-interactive Docker container. WANDB_MODE="disabled" makes every
+    # wandb call (including the trainers' automatic logging integration) a
+    # silent no-op -- training runs identically, just without remote logging.
+    if not os.environ.get("WANDB_API_KEY"):
+        print("ℹ️  WANDB_API_KEY not set -- W&B logging disabled for this run.")
+        os.environ["WANDB_MODE"] = "disabled"
+    else:
+        os.environ["WANDB_PROJECT"] = "phi_1_5_distillation_NEW_graph1_v2"
+        os.environ["WANDB_ENTITY"] = os.environ.get("WANDB_ENTITY", "olusegunodewole1")
+        os.environ["WANDB_LOG_MODEL"] = "checkpoint"
 
     # Accelerate monkey patch for a known optimizer compatibility bug
     if not hasattr(torch.optim.Optimizer, "train"):

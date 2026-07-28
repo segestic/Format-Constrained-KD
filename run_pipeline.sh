@@ -6,13 +6,18 @@ set -e
 
 echo "🔑 [1/3] Authenticating with Hugging Face and W&B..."
 if [ -n "$HF_TOKEN" ]; then
-    hf auth login --token $HF_TOKEN --add-to-git-credential
+    hf auth login --token "$HF_TOKEN" --add-to-git-credential || {
+        echo "⚠️ WARNING: Hugging Face login failed (invalid or placeholder HF_TOKEN?). Continuing without Hub authentication."
+    }
 else
     echo "⚠️ WARNING: HF_TOKEN is not set. Hugging Face login skipped."
 fi
 
 if [ -n "$WANDB_API_KEY" ]; then
-    wandb login $WANDB_API_KEY
+    if ! wandb login "$WANDB_API_KEY"; then
+        echo "⚠️ WARNING: W&B login failed (invalid or placeholder WANDB_API_KEY?). Continuing with W&B disabled."
+        export WANDB_MODE=disabled
+    fi
 else
     echo "⚠️ WARNING: WANDB_API_KEY is not set. W&B login skipped."
 fi
@@ -30,7 +35,7 @@ echo "--------------------------------------------------"
 echo "🏃 [3/3] Starting Precision Medicine Routing Execution..."
 echo "--------------------------------------------------"
 
-python main.py
+python "${1:-main.py}"
 
 echo "--------------------------------------------------"
 echo "🎉 Execution Completed Successfully."
