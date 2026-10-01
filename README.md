@@ -4,58 +4,155 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **Official repository for:**
-> *Format-Constrained Knowledge Distillation for Topology-Preserving Knowledge Graph Reasoning in Small Language Models*
+> *Format-Constrained Knowledge Distillation for Knowledge Graph Reasoning in Small Language Models: A Controlled Cross-Graph Evaluation*
 > Olusegun Oladele Odewole, Seren Başaran — Near East University
 
 ## Overview
 
-This repository implements **Format-Constrained Sequence-Level Distillation (FC-KD)**, a training and evaluation pipeline studying the *generative bottleneck* in Small Language Models (SLMs) reasoning over structured biomedical knowledge graphs.
+This repository implements the **Format-Constrained Knowledge Distillation (FC-KD)** pipeline, a training and evaluation framework for studying the *generative bottleneck* in Small Language Models (SLMs) reasoning over structured biomedical knowledge graphs.
 
-Standard autoregressive fine-tuning forces a model to simultaneously learn graph topology and string-level surface form, which we show degrades structural fidelity even when the underlying relational knowledge is well-represented internally. This pipeline trains a 1.3B-parameter student (`microsoft/phi-1_5`) via a three-stage parallel curriculum on **PrimeKG**, then evaluates zero-shot generalization on **PharmGKB**, a structurally distinct pharmacogenomic graph the model never sees during training.
+Two student backbones — `microsoft/phi-1_5` (1.3B) and `Qwen/Qwen2.5-1.5B` (1.5B, cross-model validation) — are trained on **PrimeKG** through a parallel curriculum and evaluated zero-shot on **PharmGKB**, a structurally distinct pharmacogenomic graph never seen in training, as well as on a PrimeKG evaluation pool.
 
 ### Core Capabilities
-- **Training curriculum:** Structural SFT → Topology-Anchored ORPO / Format-Constrained KD (parallel branches from a shared SFT checkpoint), all under 4-bit NF4 + LoRA.
-- **Cross-domain evaluation:** Dual-modality zero-shot testing — generative extraction (Ontological Validity, Strict Exact Match) and discriminative adversarial ranking — measured on a graph never seen in training.
+- **Training curriculum:** Structural SFT → Topology-Anchored ORPO / FC-KD / Vanilla-KD (parallel branches from a shared SFT checkpoint), all under 4-bit NF4 + LoRA, plus two matched control arms that isolate what the FC-KD stage adds.
+- **Dual-modality evaluation:** generative extraction (template compliance, Ontological Validity, Strict Exact Match) and discriminative adversarial ranking, cross-domain (PharmGKB), in-domain (PrimeKG), and on a held-out PrimeKG set that excludes every training edge.
+- **Additional analyses:** paired significance tests over five seeds, noise robustness (four noise types), constrained decoding, error decomposition, trained-vs-unseen edges, an incremental-update pilot, Vanilla-KD corpus statistics, and inter-rater / LLM-judge validation.
+
+---
+
+## What the FC-KD Stage Actually Trains On (read before interpreting results)
+
+An audit of the released code and datasets (`audit_fckd_corpus.py`) established the following. The paper's method section reflects these facts.
+
+- **FC-KD corpus composition.** `data/black_box_distill.py` asks the teacher (`microsoft/Phi-3-mini-4k-instruct`) for the target of each PrimeKG edge. A teacher output is kept only if it parses and its entity name substring-matches the ground-truth target; otherwise the **ground-truth target is substituted**. Across all five seeds, ~95.0% of FC-KD training targets are identical to the ground truth, ~4.9% are teacher name variants accepted by the substring filter, and <0.1% differ only in type.
+- **Prompts.** The FC-KD student text uses the **same prompt as evaluation** (`"Task: Analyze the biomedical relationship and output ONLY ..."`). SFT, ORPO, and Vanilla-KD train on the Stage 1 prompt (`"Analyze the biomedical relationship.\n..."`).
+- **Vanilla-KD** trains on free-form teacher answers (the teacher is asked to explain its reasoning), with no ground-truth fallback and the Stage 1 prompt. It therefore differs from FC-KD in label correctness, target format, and prompt — not in format alone.
+- **Same rows.** SFT, ORPO, FC-KD, Vanilla-KD, and both control arms draw the identical per-relation PrimeKG sample for a given seed, and SFT, FC-KD, and the control arms train on the identical 90% split.
+- **Control arms** (`train_control_arms.py`) exist to separate these factors; see below.
 
 ---
 
 ## Quickstart
 
-The pipeline has five stages, run one at a time by editing `ACTIVE_STAGE` in `config.py`. Two of them (Stage 3 and Stage 3b) need a dataset produced by a separate generation script — generate those before touching the numbered stages. Running a stage before its dependency exists stops with an error naming the missing artifact and the command needed to produce it.
+Training stages are selected with `ACTIVE_STAGE` in `config.py` and run through `main.py` / `run_pipeline.sh`. The backbone and evaluation mode can be set per command with environment variables, so `config.py` does not need editing between backbones:
+
+```bash
+export HF_HUB_USERNAME=your-username
+export STUDENT_NAME="microsoft/phi-1_5"      # or "Qwen/Qwen2.5-1.5B"
+export EVAL_MODE=cross_domain                # or "standard"
+```
+
+### A. Training (once per backbone)
 
 | Step | What to run | What it produces |
 |---|---|---|
-| 1 | `export HF_HUB_USERNAME=your-username` | — sets where all models/datasets are read from and pushed to |
-| 2 | `python data/black_box_distill.py` | `primekg-phi3-distilled-sft-seed{N}` — required for Stage 3 |
-| 3 | `python data/distill_vanilla_kd.py` | `primekg-phi3-vanillakd-sft-seed{N}` — required for Stage 3b |
-| 4 | `ACTIVE_STAGE = 1` → run the pipeline | `phi-1.5-primekg-sft-seed{N}` (SFT checkpoint) |
-| 5 | `ACTIVE_STAGE = 2` → run the pipeline | `phi-1.5-primekg-orpo-seed{N}` (ORPO checkpoint) |
-| 6 | `ACTIVE_STAGE = 3` → run the pipeline | `phi-1.5-primekg-dkd-seed{N}` (FC-KD checkpoint) |
-| 7 | `ACTIVE_STAGE = "3b"` → run the pipeline | `phi-1.5-primekg-vanillakd-seed{N}` (ablation checkpoint) |
-| 8 | `ACTIVE_STAGE = 4` → run the pipeline | Evaluation metrics in `EVAL_CONFIG["output_dir"]` |
+| 1 | `python data/black_box_distill.py` | `primekg-phi3-distilled-sft-seed{N}` — FC-KD corpus (backbone-independent) |
+| 2 | `python data/distill_vanilla_kd.py` | `primekg-phi3-vanillakd-sft-seed{N}` — Vanilla-KD corpus (backbone-independent) |
+| 3 | `ACTIVE_STAGE = 1` → run the pipeline | `{student}-primekg-sft-seed{N}` |
+| 4 | `ACTIVE_STAGE = 2` → run the pipeline | `{student}-primekg-orpo-seed{N}` |
+| 5 | `ACTIVE_STAGE = 3` → run the pipeline | `{student}-primekg-dkd-seed{N}` (FC-KD) |
+| 6 | `ACTIVE_STAGE = "3b"` → run the pipeline | `{student}-primekg-vanillakd-seed{N}` |
+| 7 | `python train_control_arms.py --arm evalprompt` | `{student}-primekg-ctl-evalprompt-seed{N}` |
+| 8 | `python train_control_arms.py --arm trainprompt` | `{student}-primekg-ctl-trainprompt-seed{N}` |
 
-Steps 4–7 each need to be repeated once per seed (`42`, `101`, `999`) by changing `CONFIG["RUN_SEED"]` between runs, to reproduce the paper's three-seed averages. Stage 3 and 3b both branch from the Stage 1 checkpoint, so Stage 1 must complete first; Stage 4 evaluation needs whichever checkpoints you want to evaluate to already exist for that seed.
+Stages 2, 3, 3b and both control arms branch from the Stage 1 checkpoint, so Stage 1 must finish first. Seeds come from `CONFIG["RUN_SEEDS"]` (`42, 101, 999, 7, 2024`); `train_control_arms.py` loops over them automatically (use `--seeds` to restrict). Check `main.py` for how the numbered stages iterate over seeds in your version.
 
-"Run the pipeline" means `./run_pipeline.sh` (local) or the equivalent `docker run` command (Docker) — see below for exact commands for each.
+### B. Evaluation and analysis
 
-W&B logging is optional. If `WANDB_API_KEY` is not set, the pipeline runs with local-only logging and no W&B account is required.
+`run_revision_pipeline.sh` runs the main evaluations and analyses for both backbones in order:
 
----
+```bash
+bash run_revision_pipeline.sh 2>&1 | tee pipeline.log
+```
 
-## Cross-Domain Evaluation Protocol
+| Step | Command | Meaning |
+|---|---|---|
+| 0 | (automatic) | Moves old `eval_outputs*` folders **outside** the project so aggregation cannot mix stale reports with new ones |
+| 1 | `train_control_arms.py --arm evalprompt / trainprompt` | Control arms (skip if already trained) |
+| 2 | `EVAL_MODE=cross_domain python evaluate.py` | PharmGKB evaluation: 7 arms × 5 seeds |
+| 3 | `EVAL_MODE=standard python evaluate.py` | PrimeKG in-domain pool: 7 arms × 5 seeds |
+| 4 | `python evaluate_expanded_noise_robustness.py` | Four noise types × 7 arms × 5 seeds |
+| 5 | `python evaluate_constrained_decoding_baseline.py` | Template-constrained decoding on SFT and FC-KD |
+| 6 | `python aggregate_and_test_all_results.py .` | Averaged tables, paired tests, Vanilla-KD breakdown → `stage12_output.txt` |
+| 7 | `python format_compliance_analysis.py` | Template compliance, error decomposition, paired tests |
+| 8 | `python seen_unseen_standard_analysis.py` | Trained vs. unseen edges within the in-domain pool |
 
-**Training and evaluation use two different, non-overlapping knowledge graphs.**
+Further experiments, run separately (per backbone where a GPU is used):
+
+| Command | Meaning |
+|---|---|
+| `EVAL_MODE=heldout python evaluate.py` | Held-out PrimeKG: each seed's exact training sample and all reverse edges are excluded before sampling |
+| `python pilot_incremental_update.py` | Incremental-update pilot (acquisition / retention / transfer); resumes after interruption |
+| `python vanillakd_corpus_stats.py` | Vanilla-KD teacher-corpus statistics vs. student template retention (CPU) |
+| `python audit_fckd_corpus.py` | FC-KD corpus composition audit (CPU) |
+| `python llm_judge_factual_correctness.py` | LLM-judge refinement of factual correctness (GPT-4o by default; needs `OPENAI_API_KEY`) |
+| `python make_manuscript_figures.py` | Robustness and error-decomposition figures from the evaluation CSVs |
+| `python figure_scripts/make_figure0_overview.py`, `make_figure1_flowchart.py`, `make_graphical_abstract.py` | Conceptual overview, architecture diagram, graphical abstract |
+
+Steps 2–5 and the held-out evaluation run once per backbone. A complete main run produces **440** report files (per backbone: 7 arms × 5 seeds × 6 evaluation modes, plus 10 constrained-decoding reports); the held-out evaluation adds 70.
+
+**Speed without changing results.** `evaluate.py` loads the base model once and swaps LoRA adapters (`EVAL_CONFIG["reuse_base_model"]`), computes the ranking loss in chunks to limit memory, and can be split across processes or GPUs:
+
+```bash
+EVAL_SHARD=0/2 CUDA_VISIBLE_DEVICES=0 python evaluate.py &
+EVAL_SHARD=1/2 CUDA_VISIBLE_DEVICES=1 python evaluate.py
+```
+
+In Jupyter, `!cmd &` is not supported; use a `%%bash` cell with `&` and `wait`. Do **not** change `batch_size` to gain speed: adversarial-trap sampling is keyed to batch position, so every arm, seed, backbone, and mode must use the same value (24). Set `force_rerun: False` to resume an interrupted evaluation without regenerating completed files.
+
+W&B logging is optional. If `WANDB_API_KEY` is not set, the pipeline runs with local-only logging.
+
+## Evaluation Protocol
 
 | Dataset | Role | Exposure |
 |---|---|---|
-| **PrimeKG** | Training (Stages 1–3) | Used for all fine-tuning; the student model only ever sees PrimeKG triples during training. |
-| **PharmGKB** | Evaluation (Stage 4) | Held out entirely. Zero PharmGKB entities, relations, or naming conventions are seen during any training stage. |
+| **PrimeKG** | Training; in-domain evaluation (`EVAL_MODE="standard"`) | Training uses up to 2,000 edges per relation per seed. |
+| **PrimeKG, held-out** | Held-out evaluation (`EVAL_MODE="heldout"`) | Every training-sample edge and its reverse excluded per seed. |
+| **PharmGKB** | Cross-domain evaluation (`EVAL_MODE="cross_domain"`) | Never seen in training. |
 
-This is a deliberate design choice, not an accidental default. Evaluating a PrimeKG-trained model on PrimeKG's own held-out split only tests memorization of one graph's local vocabulary. Evaluating on PharmGKB instead tests whether the *relational competence itself* — the model's latent ability to distinguish topologically valid from invalid structure — transfers to an unseen graph schema. This is what `EVAL_MODE="cross_domain"` in `config.py` runs, and it is the setting used for every number reported in the manuscript.
+**Cross-domain** evaluation tests whether relational competence transfers to an unseen graph schema. Because PharmGKB's entity names differ from PrimeKG's, extraction failures there mix generative failure with cross-graph vocabulary shift.
 
-An in-domain `EVAL_MODE="standard"` (held-out PrimeKG split) is also implemented, but exists only as an internal sanity check — it is **not** used for any reported result.
+**In-domain** evaluation draws up to 10,000 PrimeKG edges per relation with the same seed as training, so the 2,000-edge training sample is contained in this pool. Of the 500 evaluated edges per seed, ~27% were in the training split and ~70% were never sampled for training; `seen_unseen_standard_analysis.py` reports results for each group separately. 
 
-Because PharmGKB's entity-naming conventions differ from PrimeKG's, some fraction of Strict Exact Match failures reflect cross-graph lexical shift as well as pure surface-form generation failure. See the paper's Limitations section for a full discussion of this confound.
+**Held-out** evaluation (`EVAL_MODE="heldout"`) removes, for each seed, the exact training sample shared by all arms together with the reverse direction of every sampled edge, and then samples 500 evaluation rows with the same relation-stratified procedure, so no evaluated edge was available to any training arm.
+
+**Metrics.**
+- *Template compliance:* output matches `[Name] (Type: [Class])` with a non-empty name.
+- *Ontological Validity (OV):* reported as an F1; an output is valid if its entity exists in the evaluation graph and its stated type (when present) matches. Valid outputs count as true positives whether or not they are the ground-truth target.
+- *Strict Exact Match (SEM):* F1 against the ground-truth target (case-insensitive).
+- *Ranking Accuracy:* the model scores the ground-truth target against a same-type factual trap, a wrong-type topology trap, and a non-existent entity; chance is 25%.
+
+**Caveat.** PharmGKB includes "not associated" and "ambiguous" relations, for which the listed target is not a uniquely correct completion. All metrics treat the listed target as ground truth for every relation type.
+
+---
+
+## Control Arms
+
+`train_control_arms.py` trains two arms that are identical to Stage 3 (FC-KD) in branch point (Stage 1 adapter), learning rate, epochs, batch size, maximum length, rows, and split — only the training data differ:
+
+| Arm | Training data | Contrast | Isolates |
+|---|---|---|---|
+| `ctl-evalprompt` | Ground-truth targets, evaluation prompt | FC-KD − ctl-evalprompt | Contribution of the teacher |
+| `ctl-trainprompt` | Ground-truth targets, Stage 1 prompt | ctl-evalprompt − ctl-trainprompt | Training on the evaluation prompt |
+| | | ctl-trainprompt − SFT | Three extra epochs on the same rows |
+
+Datasets are pushed to `{HF_HUB_USERNAME}/primekg-gt-{arm}-seed{N}` and adapters to `{student}-primekg-ctl-{arm}-seed{N}`. Arm names avoid the substrings `sft`, `dkd`, `orpo`, `vanillakd`, and `control`, so filename-based arm detection in the analysis scripts cannot misclassify them. Set `CONFIG["INCLUDE_CONTROL_ARMS"] = False` to evaluate only the original arms.
+
+---
+
+## Extended Analysis Scripts
+
+- **`evaluate_constrained_decoding_baseline.py`:** applies a template-constrained decoder (forces the `(Type: …)` scaffold and end-of-sequence) to the SFT and FC-KD checkpoints. The constraint acts only on generation, so Ranking Accuracy must equal the unconstrained Cross-Domain value for the same arm and seed — a built-in integrity check. It constrains syntax only, not entity vocabulary.
+- **`evaluate_expanded_noise_robustness.py`:** four noise types, each evaluated separately — character swap, entity-type corruption, predicate corruption (a different real relation), and invalid source/target (source replaced with a graph entity of a different type; a best-effort approximation). Noise uses a dedicated RNG keyed to seed and batch position, and trap options match the clean evaluation, so differences isolate the noise. Corrupted inputs are logged per row (`Noisy_*` columns).
+- **`aggregate_and_test_all_results.py`:** rescoring of OV from CSVs, the averaged results table for all arms and modes, exact paired Wilcoxon tests with bootstrap CIs (FC-KD vs SFT, ORPO, Vanilla-KD, Ctl-EvalPrompt; Ctl-EvalPrompt vs Ctl-TrainPrompt; Ctl-TrainPrompt vs SFT), and the Vanilla-KD per-seed breakdown. Supersedes `run_significance_tests.py`.
+- **`format_compliance_analysis.py`:** template compliance and the mutually exclusive decomposition (syntactically invalid / valid syntax, invalid ontology / ontologically valid), per arm, seed, backbone, and mode, with paired tests; also tabulates LLM-judge verdicts by relation from existing audit files.
+- **`seen_unseen_standard_analysis.py`:** rebuilds each seed's training split exactly as `data_utils.py` does and splits the in-domain results into trained, sampled-not-trained, and unseen edges, with paired tests. Serves as the controlled version of the incremental-knowledge pilot.
+- **`audit_fckd_corpus.py`:** reports, per seed, how many FC-KD training targets equal the ground truth.
+- **`llm_judge_factual_correctness.py`:** judges whether ontologically valid, non-matching outputs are correct alternative completions. Uses an independent OpenAI judge by default (`OPENAI_JUDGE_MODEL`, default `gpt-4o`; responses cached in `llm_judge_outputs/`), or the teacher with `JUDGE_BACKEND=local_teacher`. Verdicts are informative mainly for "associated" relations; the paper reports factual correctness as an upper bound.
+- **`analyze_vanillakd_variance.py`:** per-seed Vanilla-KD error-class, ranking, and output-length breakdown for one backbone (its "OV" line counts `tp` only; the aggregator's Step 4 gives the corrected `tp + fp_fn` rate for both backbones).
+- **`pilot_incremental_update.py`:** incremental-update pilot. A trained checkpoint (FC-KD and SFT by default) is fine-tuned for three epochs on about 480 new PrimeKG edges outside its training sample; an update set, an old set (original training edges), and a separate held-out set are evaluated before and after through the `Evaluator` pipeline, measuring acquisition, retention, and transfer. Saves after every (arm, seed) and resumes.
+- **`vanillakd_corpus_stats.py`:** per-seed statistics of the Vanilla-KD teacher corpus (template-conforming first lines, explanatory text, length, completions containing a correct target) related to the students' template retention.
+- **`make_manuscript_figures.py`:** robustness and error-decomposition figures computed directly from the evaluation CSVs, with an explicit folder per evaluation condition.
 
 ---
 
@@ -64,78 +161,110 @@ Because PharmGKB's entity-naming conventions differ from PrimeKG's, some fractio
 ```text
 fc-kd-repo/
 │
-├── data/                     # Autogenerated cache for PrimeKG / PharmGKB downloads
+├── data/
+│   ├── black_box_distill.py            # FC-KD corpus: teacher + ground-truth filter and fallback
+│   ├── distill_vanilla_kd.py           # Vanilla-KD corpus: free-form teacher answers (+ generation stats)
+│   ├── relationships.zip               # PharmGKB relationships (auto-downloaded if absent)
+│   └── CREATED_2026-07-05.txt, info.txt, LICENSE.txt, README.pdf   # PharmGKB release files
 │
-├── config.py                 # Training + evaluation hyperparameters, seeds, environment setup
-├── data_utils.py              # PrimeKG training-data loading, tokenization, SFT/ORPO alignment
-├── models.py                  # 4-bit NF4 quantization + LoRA/PEFT model construction
-├── trainers.py                 # Stage 1 (SFT), Stage 2 (ORPO), Stage 3 (FC-KD) training classes
-├── evaluate.py                 # Stage 4: dual-modality cross-domain evaluation (PharmGKB)
-├── main.py                     # Single entrypoint routing all four stages
+├── config.py                  # Hyperparameters, seeds, arms, evaluation settings (STUDENT_NAME / EVAL_MODE env overrides)
+├── data_utils.py              # PrimeKG sampling and SFT/ORPO dataset construction
+├── models.py                  # 4-bit NF4 quantization + LoRA/PEFT construction
+├── trainers.py                # Stage 1 (SFT), 2 (ORPO), 3 (FC-KD), 3b (Vanilla-KD)
+├── train_control_arms.py      # Ctl-EvalPrompt / Ctl-TrainPrompt datasets + training
+├── main.py                    # Entry point routing ACTIVE_STAGE
 │
-├── run_pipeline.sh             # Environment verification + execution wrapper
-├── requirements.txt            # Pinned dependencies
+├── evaluate.py                                # Dual-modality evaluation (cross_domain / standard / heldout; NF4; adapter reuse; EVAL_SHARD)
+├── evaluate_expanded_noise_robustness.py      # Four noise types
+├── evaluate_constrained_decoding_baseline.py  # Template-constrained decoding on SFT / FC-KD
+├── pilot_incremental_update.py                # Incremental-update pilot (acquisition / retention / transfer)
+├── llm_judge_factual_correctness.py           # LLM-judge refinement of factual correctness
+├── run_indomain_ablation.py                   # In-domain vs cross-domain side-by-side
+│
+├── aggregate_and_test_all_results.py  # Averaged tables + paired tests (all arms, both backbones, all modes)
+├── format_compliance_analysis.py      # Template compliance + error decomposition + paired tests
+├── seen_unseen_standard_analysis.py   # Trained vs unseen edges in the in-domain pool
+├── vanillakd_corpus_stats.py          # Vanilla-KD corpus statistics vs template retention
+├── audit_fckd_corpus.py               # FC-KD corpus composition audit
+├── analyze_vanillakd_variance.py      # Vanilla-KD per-seed breakdown (single backbone)
+├── make_manuscript_figures.py         # Robustness + error-decomposition figures from CSVs
+│
+├── figure_scripts/
+│   ├── make_figure0_overview.py       # Conceptual overview (paper Figure 1)
+│   ├── make_figure1_flowchart.py      # Training arms and evaluation (paper Figure 2)
+│   └── make_graphical_abstract.py     # Graphical abstract
+│
+├── run_revision_pipeline.sh   # Main evaluation + analysis run, both backbones
+├── run_pipeline.sh            # Environment verification + ACTIVE_STAGE execution wrapper
+├── Dockerfile
+├── requirements.txt
 └── README.md
 ```
 
----
+Generated at run time (not versioned): `eval_outputs/`, `eval_outputs_noise_<type>/`, `eval_outputs_constrained_decoding_<tag>/`, held-out reports (`*_heldout_*` in the evaluation output folder), `format_compliance_outputs/`, `seen_unseen_outputs/`, `llm_judge_outputs/`, `pilot_incremental_update_outputs/`, `Final_Metrics_Averaged.csv`, `Raw_Metrics_Long.csv`, `Manuscript_Figure_Data.csv`, `vanillakd_corpus_stats.csv`.
+
+Superseded scripts kept out of the release: `run_significance_tests.py` (replaced by `aggregate_and_test_all_results.py`), `pilot_incremental_kg_update.py` (replaced by `pilot_incremental_update.py`), `end_to_end_ranking_workflow.py`, `compare_pilot_to_indomain.py`, `test_pilot_degradation_significance.py`, `measure_ranking_noise.py`, `evaluate_segestic_partial*.py`.
 
 ## Setup & Installation
 
-Two ways to run this pipeline: Docker (recommended, for reproducible FlashAttention compilation and no CUDA/PyTorch dependency conflicts) or a local Conda environment. Pick one and follow it end-to-end — the steps below are self-contained per option.
+Two ways to run this pipeline: Docker (recommended, for reproducible FlashAttention compilation and no CUDA/PyTorch dependency conflicts) or a local Conda environment.
 
 ### Option A: Docker
 
-**1. Build the image.** This installs all system dependencies, the correct PyTorch wheel, and compiles FlashAttention for the target architecture. The container is already set up to execute `run_pipeline.sh` on its own, so no manual `chmod` is needed on this path.
+**1. Build the image.**
 
 ```bash
 docker build -t format-constrained-kd .
 ```
 
-**2. Set your Hugging Face username** (used to build every model/dataset path the pipeline reads from or pushes to):
+**2. Set your Hugging Face username:**
 
 ```bash
 export HF_HUB_USERNAME=your-username-here
 ```
 
-**3. Generate the Stage 3 / 3b datasets.** Stages 3 and 3b train on teacher-model completions rather than on PrimeKG directly, so these need to exist before you run those stages:
+**3. Generate the Stage 3 / 3b datasets:**
 
 ```bash
-# Vanilla-KD teacher-generation script:
 docker run --gpus all -it --rm \
   -e HF_TOKEN="your_hf_token_here" \
-  -e WANDB_API_KEY="your_wandb_token_here" \
-  -e HF_HUB_USERNAME="$HF_HUB_USERNAME" \
-  -v $(pwd):/workspace \
-  format-constrained-kd bash run_pipeline.sh data/distill_vanilla_kd.py
-
-# FC-KD teacher-generation script:
-docker run --gpus all -it --rm \
-  -e HF_TOKEN="your_hf_token_here" \
-  -e WANDB_API_KEY="your_wandb_token_here" \
   -e HF_HUB_USERNAME="$HF_HUB_USERNAME" \
   -v $(pwd):/workspace \
   format-constrained-kd bash run_pipeline.sh data/black_box_distill.py
+
+docker run --gpus all -it --rm \
+  -e HF_TOKEN="your_hf_token_here" \
+  -e HF_HUB_USERNAME="$HF_HUB_USERNAME" \
+  -v $(pwd):/workspace \
+  format-constrained-kd bash run_pipeline.sh data/distill_vanilla_kd.py
 ```
 
-Each script pushes its output dataset to `{HF_HUB_USERNAME}/...` on the Hub. If you already have access to someone else's copy of these datasets, point to their account instead of generating your own: `-e SYNTHETIC_DATA_OWNER="their-account-name"`.
+To use someone else's copy of these datasets instead, add `-e SYNTHETIC_DATA_OWNER="their-account-name"`.
 
-**4. Set `ACTIVE_STAGE` in `config.py`** to the stage you want to run (see the Quickstart table above), then run the main pipeline:
+**4. Run a training stage** (set `ACTIVE_STAGE` in `config.py`; add `-e STUDENT_NAME=...` to select the backbone):
 
 ```bash
 docker run --gpus all -it --rm \
   -e HF_TOKEN="your_hf_token_here" \
-  -e WANDB_API_KEY="your_wandb_token_here" \
   -e HF_HUB_USERNAME="$HF_HUB_USERNAME" \
+  -e STUDENT_NAME="microsoft/phi-1_5" \
   -v $(pwd):/workspace \
   format-constrained-kd bash run_pipeline.sh
 ```
 
-`WANDB_API_KEY` is optional — omit it to run with local-only logging. `-v $(pwd):/workspace` live-mounts your working directory, so edits to `config.py` on the host (e.g. changing `ACTIVE_STAGE` or `CONFIG["RUN_SEED"]`) take effect on the next run without rebuilding the image. PrimeKG and PharmGKB are downloaded and cached to `./data` automatically on first use.
+**5. Run the evaluation and analysis:**
+
+```bash
+docker run --gpus all -it --rm \
+  -e HF_TOKEN="your_hf_token_here" \
+  -e HF_HUB_USERNAME="$HF_HUB_USERNAME" \
+  -v $(pwd):/workspace \
+  format-constrained-kd bash run_revision_pipeline.sh
+```
+
+`WANDB_API_KEY` is optional. `-v $(pwd):/workspace` live-mounts the working directory, so edits to `config.py` take effect without rebuilding. PrimeKG and PharmGKB are cached to `./data` on first use.
 
 ### Option B: Local Conda Environment
-
-**1. Create the environment and install dependencies:**
 
 ```bash
 conda create -n fc-kd python=3.10 -y
@@ -144,67 +273,52 @@ conda activate fc-kd
 # Fix for "No module named 'pkg_resources'"
 pip install "setuptools<70.0.0" wheel packaging ninja
 
-# Install PyTorch 2.7.0 strictly compiled for CUDA 12.8 (+cu128)
+# PyTorch 2.7.0 for CUDA 12.8
 pip install torch==2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-# Install baseline requirements
 pip install -r requirements.txt
 
-# Pin core AI toolchains (grouped together so pip cannot silently downgrade them)
+# Pin core toolchains together so pip cannot silently downgrade them
 pip install transformers==4.57.6 trl==0.11.4 peft==0.19.1 accelerate==1.13.0
 
-# Install Flash Attention
 pip install flash-attn==2.8.3 --no-build-isolation
-```
 
-**2. Make the wrapper script executable** (only needed once — this is a host-side permission, not something Docker needs since the image sets it during build):
-
-```bash
 chmod +x run_pipeline.sh
-```
 
-**3. Set your environment variables:**
-
-```bash
 export HF_HUB_USERNAME=your-username-here
 export HF_TOKEN=your_hf_token_here
-export WANDB_API_KEY=your_wandb_token_here   # optional — omit to run with local-only logging
+export WANDB_API_KEY=your_wandb_token_here   # optional
+
+./run_pipeline.sh data/black_box_distill.py
+./run_pipeline.sh data/distill_vanilla_kd.py
+./run_pipeline.sh                            # training stage set by ACTIVE_STAGE
+bash run_revision_pipeline.sh                # evaluation + analysis
 ```
-
-**4. Generate the Stage 3 / 3b datasets** (required before running those stages; skip if you already have them or are pointing to `SYNTHETIC_DATA_OWNER`):
-
-```bash
-./run_pipeline.sh data/black_box_distill.py     # produces the Stage 3 (FC-KD) dataset
-./run_pipeline.sh data/distill_vanilla_kd.py    # produces the Stage 3b (Vanilla-KD) dataset
-```
-
-**5. Set `ACTIVE_STAGE` in `config.py`** to the stage you want to run (see the Quickstart table above), then run the pipeline:
-
-```bash
-./run_pipeline.sh
-```
-
-PrimeKG and PharmGKB are downloaded and cached to `./data` automatically on first use.
 
 ---
 
 ## Reproducibility Notes
 
-- **Seeds:** All reported results are averaged over three independent seeds (`42`, `101`, `999`), set via `CONFIG["RUN_SEED"]` (training) and `EVAL_CONFIG["SEEDS_TO_EVAL"]` (evaluation).
-- **Ground-truth normalization:** Strict Exact Match comparisons normalize both the predicted and ground-truth strings identically (`.strip().lower()`) before comparison, avoiding false mismatches from incidental whitespace or casing differences in the source data.
-- **Attention implementation:** `flash_attention_2` is selected automatically when the host GPU reports compute capability ≥ 8.0 (`models.get_attn_impl()`), falling back to eager attention otherwise. This is applied consistently across all three training stages and affects throughput only, not the numerical results reported in the paper.
-- **Stage branching:** Both Stage 2 (ORPO) and Stage 3 (FC-KD) load their base adapter from the **Stage 1** checkpoint, not from each other — this is intentional, to keep the two optimization branches isolated for the ablation comparison (see paper Section 3.1).
+- **Seeds.** All results are reported over five seeds (`42, 101, 999, 7, 2024`; `CONFIG["RUN_SEEDS"]`, `EVAL_CONFIG["SEEDS_TO_EVAL"]`). `main.py` calls `set_global_seed(seed)` before training, so each seed determines the training sample and split, the evaluation sample, and the LoRA adapter initialization. The trainers' own seed (example shuffling and dropout) is left at its default (42); the training procedure is otherwise identical across seeds.
+- **Determinism.** `evaluate.py` enables deterministic PyTorch/cuDNN algorithms and sets `CUBLAS_WORKSPACE_CONFIG`. Adversarial traps and robustness noise are drawn from dedicated RNGs keyed to `(seed, batch start index)`, and ontology lists are sorted, so a given (arm, seed) evaluates identically in isolation and inside a full run.
+- **Batch size.** Evaluation uses `batch_size = 24` for every arm, seed, backbone, and mode. Changing it changes which traps each example receives and slightly changes GPU numerics, so results at different batch sizes are not comparable.
+- **Hardware.** The cross-domain, in-domain, noise, and constrained-decoding evaluations were produced in a single pass on one NVIDIA GeForce RTX 3090 (24 GB); the held-out evaluation and the update pilot used the same code and settings on a separate machine. Arm means can shift by up to about 2.4pp across hardware and batch-size configurations, so compare arms within one machine.
+- **Quantization.** Training and evaluation both load the base model in 4-bit **NF4** with bf16 compute. (Earlier versions of `evaluate.py` did not set the quantization type and therefore evaluated in FP4; all reported results use NF4.)
+- **Attention.** Training selects `flash_attention_2` when the GPU has compute capability ≥ 8.0 (`config.get_attn_impl()`), otherwise eager. `evaluate.py` uses the Transformers default (SDPA). The difference is numerical at floating-point level only.
+- **String normalization.** Strict Exact Match and vocabulary lookups normalize with `.strip().lower()`.
+- **Stage branching.** ORPO, FC-KD, Vanilla-KD, and both control arms load the **Stage 1** adapter, not each other.
 
 ---
 
 ## Memory Profile & Hardware Requirements
 
-| Model | Size | Configuration | Max Sequence | Peak VRAM |
+| Model | Role | Size | Configuration | Max Sequence |
 |---|---|---|---|---|
-| `microsoft/phi-1_5` | 1.3B | 4-bit NF4 + LoRA (r=32) | 512 | ~4.8 GB |
-| `microsoft/Phi-3.5-mini-instruct` (control) | 3.8B | 4-bit NF4 | 512 | ~7.2 GB |
+| `microsoft/phi-1_5` | Student | 1.3B | 4-bit NF4 + LoRA (r=32, α=64) | 512 |
+| `Qwen/Qwen2.5-1.5B` | Student (cross-model validation) | 1.5B | 4-bit NF4 + LoRA (r=32, α=64) | 512 |
+| `microsoft/Phi-3-mini-4k-instruct` | Teacher / LLM judge | 3.8B | 4-bit NF4 | — |
 
-Reference hardware: 1× NVIDIA RTX 3090 Ti (24GB VRAM), 64GB system RAM, Ubuntu 22.04 LTS.
+Evaluation at `batch_size = 24` fits both students on a 24 GB GPU; Qwen2.5-1.5B's 151k-token vocabulary makes it the memory-limiting backbone for the ranking pass. Evaluation hardware: 1× NVIDIA GeForce RTX 3090 (24 GB).
 
 ---
 
@@ -212,7 +326,7 @@ Reference hardware: 1× NVIDIA RTX 3090 Ti (24GB VRAM), 64GB system RAM, Ubuntu 
 
 ```bibtex
 @article{odewole2026formatconstrained,
-  title={Format-Constrained Knowledge Distillation for Topology-Preserving Knowledge Graph Reasoning in Small Language Models},
+  title={Format-Constrained Knowledge Distillation for Knowledge Graph Reasoning in Small Language Models: A Controlled Cross-Graph Evaluation},
   author={Odewole, Olusegun Oladele and Ba{\c{s}}aran, Seren},
   journal={Under review},
   year={2026},
@@ -224,7 +338,7 @@ Reference hardware: 1× NVIDIA RTX 3090 Ti (24GB VRAM), 64GB system RAM, Ubuntu 
 
 ## Disclaimer
 
-The data, models, and scripts in this repository are for **academic and computational research evaluation only**. They are not intended for clinical use, diagnostic applications, or real-world medical decision-making. Cross-domain evaluation results reflect PrimeKG-to-PharmGKB generalization only and should not be interpreted as validated performance on any specific downstream pharmacogenomic application.
+The data, models, and scripts in this repository are for **academic and computational research evaluation only**. They are not intended for clinical use, diagnostic applications, or real-world medical decision-making. Results reflect PrimeKG and PrimeKG-to-PharmGKB evaluation only and should not be interpreted as validated performance on any downstream pharmacogenomic application.
 
 ## License
 

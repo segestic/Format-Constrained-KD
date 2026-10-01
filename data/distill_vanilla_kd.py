@@ -19,6 +19,7 @@
 import os
 import sys
 import gc
+import json
 import torch
 import random
 import numpy as np
@@ -47,6 +48,11 @@ INFERENCE_BATCH_SIZE = EVAL_CONFIG.get("batch_size", 32)
 # Vanilla-KD completions are free-form, so they need more headroom than the
 # 25-token budget used for the strict "[Node] (Type: [Class])" FC-KD target.
 MAX_NEW_TOKENS_VANILLA = 80
+# NEW (review comment #5 support): per-seed generation stats persisted here so
+# analyze_vanillakd_variance.py can cross-reference generation-time behavior
+# (empty-completion rate, completion length) against evaluation-time OV
+# variance, instead of relying on terminal output that disappears after the run.
+GENERATION_LOG_PATH = "./data/vanillakd_generation_stats.json"
 
 # ==============================================================================
 # 1. LOAD DATA ONCE (identical source rows to the FC-KD run for comparability)
@@ -105,6 +111,7 @@ for SEED in SEEDS:
 
     distilled_texts = []
     empty_completion_count = 0
+    completion_lengths = []  # NEW: tracked per seed for review comment #5
 
     for i in tqdm(range(0, len(df_sample), INFERENCE_BATCH_SIZE), desc=f"Vanilla-KD Seed {SEED}"):
 
@@ -170,10 +177,35 @@ for SEED in SEEDS:
             )
 
             distilled_texts.append(sft_string)
+            completion_lengths.append(len(clean_completion))  # NEW: review comment #5
 
     print(f"\n✅ Vanilla-KD distillation for Seed {SEED} Complete!")
     print(f"⚠️ Empty completions dropped: {empty_completion_count}/{len(df_sample)} "
           f"({(empty_completion_count/len(df_sample))*100:.2f}%)")
+
+    # NEW (review comment #5): persist per-seed generation stats so the
+    # variance analysis can be run later without needing to re-parse terminal
+    # logs -- this is the "empty-completion stat only printed to stdout"
+    # gap being closed going forward for this and any future seed's run.
+    seed_stats = {
+        "seed": SEED,
+        "n_rows_sampled": len(df_sample),
+        "n_completions_kept": len(distilled_texts),
+        "empty_completions_dropped": empty_completion_count,
+        "empty_completion_rate": empty_completion_count / len(df_sample),
+        "completion_length_mean_chars": (sum(completion_lengths) / len(completion_lengths)) if completion_lengths else None,
+        "completion_length_min_chars": min(completion_lengths) if completion_lengths else None,
+        "completion_length_max_chars": max(completion_lengths) if completion_lengths else None,
+    }
+    all_seed_stats = []
+    if os.path.exists(GENERATION_LOG_PATH):
+        with open(GENERATION_LOG_PATH, "r") as f:
+            all_seed_stats = json.load(f)
+    all_seed_stats = [s for s in all_seed_stats if s["seed"] != SEED]  # replace if re-run
+    all_seed_stats.append(seed_stats)
+    with open(GENERATION_LOG_PATH, "w") as f:
+        json.dump(all_seed_stats, f, indent=2)
+    print(f"📝 Persisted generation stats for seed {SEED} to {GENERATION_LOG_PATH}")
 
     # Push to HuggingFace Hub under a distinct repo name (parallel to the
     # FC-KD dataset naming convention, distinguished by "vanillakd").

@@ -33,3 +33,4 @@ ipywidgets==8.1.8
 # 5. CLI & Formatting Utilities (Required by TRL)
 rich
 tyro
+tabulate

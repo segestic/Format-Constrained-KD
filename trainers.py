@@ -7,7 +7,7 @@ Distillation / FC-KD (Stage 3). All three stages branch from the Stage 1
 checkpoint to preserve preference isolation between the ORPO and FC-KD
 optimization paths (see paper Section 3.1, "Parallel Alignment Curriculum").
 """
-
+import os
 import gc
 
 import torch
@@ -22,6 +22,9 @@ except ImportError:
 
 from config import CONFIG
 from models import get_quantized_base_model, get_tokenizer, setup_peft_model
+
+# This guarantees determinism WITHOUT a performance penalty
+#os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8" 
 
 
 def clear_gpu_cache():
@@ -46,7 +49,7 @@ class PipelineTrainer:
 
         tokenizer = get_tokenizer(CONFIG["student_name"])
         base_model = get_quantized_base_model(CONFIG["student_name"])
-        model = setup_peft_model(base_model)
+        model = setup_peft_model(base_model, model_name_or_path=CONFIG["student_name"])
 
         trainer = SFTTrainer(
             model=model,
@@ -74,16 +77,23 @@ class PipelineTrainer:
         tokenizer.save_pretrained(output_dir)
 
         self.push_artifacts(trainer, tokenizer, f"{CONFIG['hub_username']}/{CONFIG['s1_output_dir']}-seed{self.seed}")
+        # Force deletion of local variables to free GPU memory
+        del trainer
+        del model
+        del tokenizer
 
     def run_stage_2_orpo(self, train_data):
         print(f"\n🚀 STAGE 2: TOPOLOGY ORPO | SEED: {self.seed}")
         clear_gpu_cache()
-        input_dir = f"./{CONFIG['s1_output_dir']}-seed{self.seed}"
+        
+        # --- CHANGED: Load from Hugging Face instead of local directory ---
+        input_repo_id = f"{CONFIG['hub_username']}/{CONFIG['s1_output_dir']}-seed{self.seed}"
         output_dir = f"./{CONFIG['s2_output_dir']}-seed{self.seed}"
 
-        tokenizer = get_tokenizer(input_dir)
+        # Pass the HF repo ID to your tokenizer and PEFT model loader
+        tokenizer = get_tokenizer(input_repo_id)
         base_model = get_quantized_base_model(CONFIG["student_name"])
-        model = PeftModel.from_pretrained(base_model, input_dir, is_trainable=True)
+        model = PeftModel.from_pretrained(base_model, input_repo_id, is_trainable=True)
 
         # ====================================================================
         # FIX FOR TRL/TRANSFORMERS VERSION MISMATCHES (v5.8.1 compat)
@@ -143,6 +153,10 @@ class PipelineTrainer:
         trainer.model.save_pretrained(output_dir)
 
         self.push_artifacts(trainer, tokenizer, f"{CONFIG['hub_username']}/{CONFIG['s2_output_dir']}-seed{self.seed}")
+        # Force deletion of local variables to free GPU memory
+        del trainer
+        del model
+        del tokenizer
 
     def run_stage_3_distillation(self):
         print(f"\n🚀 STAGE 3: FORMAT-CONSTRAINED DISTILLATION (FC-KD) | SEED: {self.seed}")
@@ -197,6 +211,10 @@ class PipelineTrainer:
         trainer.model.save_pretrained(output_dir)
 
         self.push_artifacts(trainer, tokenizer, f"{CONFIG['hub_username']}/{CONFIG['s3_output_dir']}-seed{self.seed}")
+        # Force deletion of local variables to free GPU memory
+        del trainer
+        del model
+        del tokenizer
 
     #new
     def run_stage_3b_vanilla_kd(self):
@@ -256,3 +274,7 @@ class PipelineTrainer:
             trainer, tokenizer,
             f"{CONFIG['hub_username']}/{CONFIG['s3b_output_dir']}-seed{self.seed}"
         )
+        # Force deletion of local variables to free GPU memory
+        del trainer
+        del model
+        del tokenizer
