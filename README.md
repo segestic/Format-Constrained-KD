@@ -1,11 +1,12 @@
 # Format-Constrained Knowledge Distillation (FC-KD) for SLMs
 
-[![Paper](https://img.shields.io/badge/Paper-Under%20Review-b31b1b.svg)](#citation)
+[![Paper](https://img.shields.io/badge/Paper-Knowledge--Based%20Systems-0066cc.svg)](https://doi.org/10.1016/j.knosys.2026.117372)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **Official repository for:**
-> *Format-Constrained Knowledge Distillation for Knowledge Graph Reasoning in Small Language Models: A Controlled Cross-Graph Evaluation*
+> *Evaluating format-constrained knowledge distillation for knowledge graph reasoning in small language models: A controlled cross-graph study*
 > Olusegun Oladele Odewole, Seren Başaran — Near East University
+> Published in *Knowledge-Based Systems* (2026), Vol. 117372. DOI: [10.1016/j.knosys.2026.117372](https://doi.org/10.1016/j.knosys.2026.117372)
 
 ## Overview
 
@@ -325,16 +326,20 @@ Evaluation at `batch_size = 24` fits both students on a 24 GB GPU; Qwen2.5-1.5B'
 ## Citation
 
 ```bibtex
-@article{odewole2026formatconstrained,
-  title={Format-Constrained Knowledge Distillation for Knowledge Graph Reasoning in Small Language Models: A Controlled Cross-Graph Evaluation},
-  author={Odewole, Olusegun Oladele and Ba{\c{s}}aran, Seren},
-  journal={Under review},
-  year={2026},
-  institution={Near East University, Faculty of Artificial Intelligence and Informatics}
+@article{ODEWOLE2026117372,
+  title = {Evaluating format-constrained knowledge distillation for knowledge graph reasoning in small language models: A controlled cross-graph study},
+  author = {Odewole, Olusegun Oladele and Ba{\c{s}}aran, Seren},
+  journal = {Knowledge-Based Systems},
+  pages = {117372},
+  year = {2026},
+  issn = {0950-7051},
+  doi = {https://doi.org/10.1016/j.knosys.2026.117372},
+  url = {https://www.sciencedirect.com/science/article/pii/S0950705126020988},
+  keywords = {Knowledge graph completion, Small language models, Knowledge distillation, Cross-graph generalization, Generative bottleneck, Controlled evaluation}
 }
 ```
 
-*(Update with the final venue and DOI upon acceptance.)*
+---
 
 ## Disclaimer
 
